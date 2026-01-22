@@ -1,0 +1,24 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+
+# Virtual Environment
+.venv/
+venv/
+ENV/
+
+# Environment Variables
+.env
+
+# JetBrains IDEs
+.idea/
+
+# Project-specific
+logs/
+temp/
+
+# OS
+.DS_Store
+Thumbs.db
