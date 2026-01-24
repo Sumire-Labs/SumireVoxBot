@@ -3,11 +3,12 @@ from discord.ext import commands
 import os
 from dotenv import load_dotenv
 from src.utils.voicevox_client import VoicevoxClient
+from src.database import Database
 
 # インテントの設定
 intents = discord.Intents.default()
 intents.members = True
-intents.message_content = True  # チャットを読み上げるために必須
+intents.message_content = True
 
 cogs = [
     "src.cogs.voice"
@@ -22,8 +23,11 @@ class SumireVox(commands.Bot):
             help_command=None
         )
         self.vv_client = VoicevoxClient()
+        self.db = Database()
 
     async def setup_hook(self) -> None:
+        await self.db.init_db()
+
         print("--- Loading Cogs ---")
         for cog in cogs:
             try:
@@ -37,7 +41,10 @@ class SumireVox(commands.Bot):
         print("--- Closing Bot ---")
         await self.vv_client.close()
         print("✅ VOICEVOX session closed.")
+        await self.db.close()
+        print("✅ Database session closed.")
         await super().close()
+        print("✅ Discord session closed.")
 
     async def on_ready(self) -> None:
         print(f"Logged in as {self.user} (ID: {self.user.id})")
@@ -50,7 +57,6 @@ bot = SumireVox()
 @commands.is_owner()
 async def sync(ctx):
     print("Syncing...")
-    # 同期されたコマンドのリストを受け取り、その数を確認する
     synced = await bot.tree.sync()
     await ctx.send(f"Successfully synced {len(synced)} commands.")
     print(f"Synced {len(synced)} commands.")
