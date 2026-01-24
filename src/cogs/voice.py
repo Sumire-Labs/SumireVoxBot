@@ -76,6 +76,10 @@ class Voice(commands.Cog):
         if len(content) > limit:
             content = content[:limit] + "、以下略"
 
+        # 添付ファイルのチェック
+        if message.attachments:
+            content += f"、{len(message.attachments)}件の添付ファイル"
+
         if not content.strip():
             return
 

@@ -35,4 +35,4 @@ pip install discord.py python-dotenv aiohttp aiofiles asyncpg
 - [x] 長文の省略読み上げ
 - [ ] グローバル辞書
 - [ ] サーバーごとの辞書
-- [ ] 添付ファイルの通知
+- [x] 添付ファイルの通知
