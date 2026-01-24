@@ -67,10 +67,10 @@ class Voice(commands.Cog):
         content = message.clean_content
 
         # コードブロックを省略
-        content = re.sub(r"```.*?```", "コードブロック省略", content, flags=re.DOTALL)
+        content = re.sub(r"```.*?```", "、コードブロック省略、", content, flags=re.DOTALL)
 
         # URLを省略
-        content = re.sub(r'https?://[\w/:%#$&?()~.=+\-]+', 'URL省略', content)
+        content = re.sub(r'https?://[\w/:%#$&?()~.=+\-]+', '、URL省略、', content)
 
         if not content.strip():
             return
