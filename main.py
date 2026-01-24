@@ -2,7 +2,7 @@ import discord
 from discord.ext import commands
 import os
 from dotenv import load_dotenv
-from src.voicevox_client import VoicevoxClient
+from src.utils.voicevox_client import VoicevoxClient
 
 # インテントの設定
 intents = discord.Intents.default()
