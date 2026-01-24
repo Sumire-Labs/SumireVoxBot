@@ -17,33 +17,29 @@ class VoicevoxClient:
             self.session = aiohttp.ClientSession()
         return self.session
 
-    async def generate_sound(self, text: str, speaker_id: int = 0, output_path: str = "output.wav"):
+    async def generate_sound(self, text: str, speaker_id: int = 0, speed: float = 1.0, pitch: float = 0.0, output_path: str = "output.wav"):
         # 使い回しのセッションを取得
         session = await self._get_session()
 
         # audio_query
-        params = {"text": text, "speaker": speaker_id}
-        async with session.post(f"{self.base_url}/audio_query", params=params) as resp:
-            if resp.status != 200:
-                raise Exception(f"Query failed: {resp.status}")
+        async with session.post(f"{self.base_url}/audio_query", params={"text": text, "speaker": speaker_id}) as resp:
             query_data = await resp.json()
 
+        # 設定を反映
+        query_data["speedScale"] = speed
+        query_data["pitchScale"] = pitch
+
         # synthesis
-        headers = {"Content-Type": "application/json"}
         async with session.post(
                 f"{self.base_url}/synthesis",
                 params={"speaker": speaker_id},
                 data=json.dumps(query_data),
-                headers=headers
+                headers={"Content-Type": "application/json"}
         ) as resp:
-            if resp.status != 200:
-                raise Exception(f"Synthesis failed: {resp.status}")
             audio_data = await resp.read()
 
-        # save
         async with aiofiles.open(output_path, "wb") as f:
             await f.write(audio_data)
-
         return output_path
 
     async def close(self):
