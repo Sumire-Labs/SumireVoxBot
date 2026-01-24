@@ -3,6 +3,7 @@ from discord import app_commands
 from discord.ext import commands
 import os
 import asyncio
+import re
 
 
 # noinspection PyUnresolvedReferences
@@ -63,9 +64,19 @@ class Voice(commands.Cog):
         if message.channel.id != self.read_channels.get(message.guild.id):
             return
 
+        content = message.clean_content
+
+        # コードブロックを省略
+        content = re.sub(r"```.*?```", "コードブロック省略", content, flags=re.DOTALL)
+
+        # URLを省略
+        content = re.sub(r'https?://[\w/:%#$&?()~.=+\-]+', 'URL省略', content)
+
+        if not content.strip():
+            return
+
         queue = self.get_queue(message.guild.id)
-        # テキストと「誰の発言か」をセットで入れる
-        await queue.put((message.clean_content, message.author.id))
+        await queue.put((content, message.author.id))
 
         if not self.is_processing[message.guild.id]:
             asyncio.create_task(self.play_next(message.guild.id))
@@ -105,7 +116,7 @@ class Voice(commands.Cog):
             # チャンネルの記憶を削除
             self.read_channels.pop(interaction.guild.id, None)
 
-            await interaction.guild.voice_client.disconnect()
+            await interaction.guild.voice_client.disconnect(force=True)
             await interaction.response.send_message("👋 切断しました。")
         else:
             await interaction.response.send_message("❌ Botはボイスチャンネルに接続していません。", ephemeral=True)
