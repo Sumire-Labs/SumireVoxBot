@@ -3,7 +3,7 @@ from discord.ext import commands
 import os
 from dotenv import load_dotenv
 from src.utils.voicevox_client import VoicevoxClient
-from src.database import Database
+from src.utils.database import Database
 
 # インテントの設定
 intents = discord.Intents.default()
