@@ -6,3 +6,15 @@ services:
     ports:
       - "50021:50021"
     restart: unless-stopped
+  db:
+    image: postgres:15
+    container_name: sumire_vox_db
+    restart: always
+    environment:
+      POSTGRES_USER: user
+      POSTGRES_PASSWORD: password
+      POSTGRES_DB: sumire_vox
+    ports:
+      - "5432:5432"
+    volumes:
+      - ./postgres_data:/var/lib/postgresql/data
