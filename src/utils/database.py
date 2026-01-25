@@ -9,7 +9,7 @@ class Database:
     async def connect(self):
         """DB接続プールの作成"""
         if self.pool is None:
-            self.pool = asyncpg.create_pool(
+            self.pool = await asyncpg.create_pool(
                 user=os.getenv("POSTGRES_USER"),
                 password=os.getenv("POSTGRES_PASSWORD"),
                 database=os.getenv("POSTGRES_DB"),
