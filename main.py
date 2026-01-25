@@ -1,9 +1,12 @@
+import asyncio
+
 import discord
 from discord.ext import commands
 import os
 from dotenv import load_dotenv
 from src.utils.voicevox_client import VoicevoxClient
 from src.utils.database import Database
+from src.web_admin import run_web_admin
 
 # インテントの設定
 intents = discord.Intents.default()
@@ -27,6 +30,7 @@ class SumireVox(commands.Bot):
 
     async def setup_hook(self) -> None:
         await self.db.init_db()
+        asyncio.create_task(run_web_admin(self.vv_client))
 
         print("--- Loading Cogs ---")
         for cog in cogs:

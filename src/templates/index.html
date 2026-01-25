@@ -1,0 +1,48 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+    <title>VOICEVOX 辞書管理</title>
+    <style>
+        body { font-family: sans-serif; margin: 20px; background: #f0f2f5; }
+        .container { max-width: 800px; margin: auto; background: white; padding: 20px; border-radius: 8px; shadow: 0 2px 4px rgba(0,0,0,0.1); }
+        table { width: 100%; border-collapse: collapse; margin-top: 20px; }
+        th, td { border: 1px solid #ddd; padding: 12px; text-align: left; }
+        th { background: #eee; }
+        .btn-delete { color: white; background: #ff4d4d; border: none; padding: 5px 10px; cursor: pointer; border-radius: 4px; }
+        .add-form { background: #e7f3ff; padding: 15px; border-radius: 4px; }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <h1>🌐 グローバル辞書管理 (VOICEVOX)</h1>
+
+        <div class="add-form">
+            <h3>新規登録</h3>
+            <form action="/add" method="post">
+                単語: <input type="text" name="word" required placeholder="Discord">
+                読み: <input type="text" name="reading" required placeholder="ディスコード">
+                <button type="submit">登録</button>
+            </form>
+        </div>
+
+        <table>
+            <tr>
+                <th>表記 (Surface)</th>
+                <th>読み (Pronunciation)</th>
+                <th>操作</th>
+            </tr>
+            {% for uuid, data in user_dict.items() %}
+            <tr>
+                <td>{{ data.surface }}</td>
+                <td>{{ data.pronunciation }}</td>
+                <td>
+                    <form action="/delete/{{ uuid }}" method="post" style="display:inline;">
+                        <button class="btn-delete">削除</button>
+                    </form>
+                </td>
+            </tr>
+            {% endfor %}
+        </table>
+    </div>
+</body>
+</html>
