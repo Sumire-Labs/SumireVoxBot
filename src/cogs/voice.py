@@ -43,8 +43,10 @@ class Voice(commands.Cog):
 
                 file_path = f"{self.temp_dir}/audio_{guild_id}.wav"
                 try:
+                    normalized_text = text.lower()
+
                     await self.bot.vv_client.generate_sound(
-                        text=text,
+                        text=normalized_text,
                         speaker_id=s["speaker"],
                         speed=s["speed"],
                         pitch=s["pitch"],

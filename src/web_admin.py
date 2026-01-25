@@ -30,17 +30,17 @@ def authenticate(credentials: HTTPBasicCredentials = Depends(security)):
     return credentials.username
 
 @app.get("/", response_class=HTMLResponse)
-async def index(request: Request, username: str = Depends(authenticate)):
+async def index(request: Request):
     user_dict = await vv_client.get_user_dict()
     return templates.TemplateResponse("index.html", {"request": request, "user_dict": user_dict})
 
 @app.post("/add")
-async def add_word(word: str = Form(...), reading: str = Form(...), username: str = Depends(authenticate)):
-    await vv_client.add_user_dict(word, reading)
+async def add_word(word: str = Form(...), reading: str = Form(...)):
+    await vv_client.add_user_dict(word.lower(), reading)
     return RedirectResponse(url="/", status_code=303)
 
 @app.post("/delete/{uuid}")
-async def delete_word(uuid: str, username: str = Depends(authenticate)):
+async def delete_word(uuid: str):
     await vv_client.delete_user_dict(uuid)
     return RedirectResponse(url="/", status_code=303)
 
