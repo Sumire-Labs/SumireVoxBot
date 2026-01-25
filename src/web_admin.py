@@ -37,19 +37,36 @@ async def index(request: Request):
 
 @app.post("/add")
 async def add_word(word: str = Form(...), reading: str = Form(...), username: str = Depends(authenticate)):
-    # 1. 前後の空白を削除 (.strip())
-    word = word.strip()
-    reading = reading.strip()
+    # 1. 入力データの正規化 (比較用)
+    # 単語(表記)を「全角・小文字」に統一
+    input_word = jaconv.h2z(word.strip(), kana=True, digit=True, ascii=True).lower()
 
-    # 2. 表記を小文字化して揺れを防止
-    normalized_word = word.lower()
+    # 読みを「全角カタカナ」に統一
+    input_reading = jaconv.hira2kata(jaconv.h2z(reading.strip(), kana=True, digit=False, ascii=False))
 
-    # 3. 読みを全角カタカナに変換 (jaconv)
-    normalized_reading = jaconv.h2z(reading, kana=True, digit=False, ascii=False)
-    normalized_reading = jaconv.hira2kata(normalized_reading)
+    # 2. エンジン側の辞書を取得
+    user_dict = await vv_client.get_user_dict()
 
-    # エンジン側に登録
-    await vv_client.add_user_dict(normalized_word, normalized_reading)
+    # 3. 重複チェック
+    # エンジン側の既存データも「全角・小文字」に変換して比較する
+    existing_uuids = []
+    for uuid, data in user_dict.items():
+        # エンジンから返ってくる surface を正規化
+        normalized_surface = jaconv.h2z(data['surface'], kana=True, digit=True, ascii=True).lower()
+
+        if normalized_surface == input_word:
+            existing_uuids.append(uuid)
+
+    # 4. 重複がある場合は削除
+    for old_uuid in existing_uuids:
+        try:
+            await vv_client.delete_user_dict(old_uuid)
+        except:
+            pass
+
+    # 5. 登録
+    await vv_client.add_user_dict(input_word, input_reading)
+
     return RedirectResponse(url="/", status_code=303)
 
 @app.post("/delete/{uuid}")
