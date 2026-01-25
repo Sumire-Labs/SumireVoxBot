@@ -18,6 +18,7 @@ ENV/
 # Project-specific
 logs/
 temp/
+postgres_data/
 
 # OS
 .DS_Store
