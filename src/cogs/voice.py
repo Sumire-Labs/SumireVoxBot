@@ -5,6 +5,7 @@ import os
 import asyncio
 import re
 import jaconv
+from loguru import logger
 
 
 def is_katakana(text: str) -> bool:
@@ -23,6 +24,7 @@ class Voice(commands.Cog):
 
         if not os.path.exists(self.temp_dir):
             os.makedirs(self.temp_dir)
+            logger.info(f"一時ディレクトリを作成しました: {self.temp_dir}")
 
     def get_queue(self, guild_id: int) -> asyncio.Queue:
         if guild_id not in self.queues:
@@ -30,6 +32,7 @@ class Voice(commands.Cog):
             self.is_processing[guild_id] = False
         return self.queues[guild_id]
 
+    @logger.catch()
     async def play_next(self, guild_id: int):
         self.is_processing[guild_id] = True
         queue = self.get_queue(guild_id)
@@ -47,6 +50,8 @@ class Voice(commands.Cog):
                     # kana, digit, ascii すべてを全角(h2z)にし、英字は小文字(lower)にする
                     normalized_text = jaconv.h2z(text, kana=True, digit=True, ascii=True).lower()
 
+                    logger.debug(f"[{guild_id}] 音声生成開始: {normalized_text[:20]}...")
+
                     await self.bot.vv_client.generate_sound(
                         text=normalized_text,
                         speaker_id=s["speaker"],
@@ -63,6 +68,9 @@ class Voice(commands.Cog):
                             after=lambda e: self.bot.loop.call_soon_threadsafe(stop_event.set)
                         )
                         await stop_event.wait()
+                        logger.info(f"[{guild_id}] 再生完了: {normalized_text[:15]}")
+                except Exception as e:
+                    logger.error(f"[{guild_id}] 再生中にエラーが発生しました: {e}")
                 finally:
                     queue.task_done()
         finally:
@@ -124,7 +132,7 @@ class Voice(commands.Cog):
                         self.queues[guild_id].get_nowait()
                     except asyncio.QueueEmpty:
                         break
-            print(f"[{guild_id}] VC切断を確認したため、データをクリアしました。")
+            logger.warning(f"[{guild_id}] VC切断を検知したため、キューをクリアしました。")
 
     @app_commands.command(name="join", description="ボイスチャンネルに接続し、このチャンネルを読み上げます")
     async def join(self, interaction: discord.Interaction):
@@ -134,6 +142,7 @@ class Voice(commands.Cog):
 
             channel = interaction.user.voice.channel
             await channel.connect()
+            logger.success(f"[{interaction.guild.id}] {channel.name} に接続しました。")
             await interaction.response.send_message(
                 f"✅ {channel.name} に接続しました。このチャンネルのチャットを読み上げます。")
         else:
@@ -146,6 +155,7 @@ class Voice(commands.Cog):
             self.read_channels.pop(interaction.guild.id, None)
 
             await interaction.guild.voice_client.disconnect(force=True)
+            logger.info(f"[{interaction.guild.id}] VCから切断しました。")
             await interaction.response.send_message("👋 切断しました。")
         else:
             await interaction.response.send_message("❌ Botはボイスチャンネルに接続していません。", ephemeral=True)
@@ -213,6 +223,7 @@ class Voice(commands.Cog):
             return await interaction.response.send_message("❌ 単語を入力してください。", ephemeral=True)
 
         await self.bot.db.set_guild_word(interaction.guild.id, word, normalized_reading)
+        logger.success(f"[{interaction.guild.id}] 辞書登録: {word} -> {normalized_reading}")
         return await interaction.response.send_message(f"🏠 サーバー辞書に登録しました: `{word}` → `{normalized_reading}`")
 
     @app_commands.command(name="remove_word", description="辞書から単語を削除します")
@@ -221,6 +232,7 @@ class Voice(commands.Cog):
         success = await self.bot.db.remove_guild_word(interaction.guild.id, word)
 
         if success:
+            logger.success(f"[{interaction.guild.id}] 辞書削除: {word}")
             return await interaction.response.send_message(f"🗑️ `{word}` を辞書から削除しました。")
         else:
             return await interaction.response.send_message(f"⚠️ `{word}` は辞書に登録されていません。", ephemeral=True)
