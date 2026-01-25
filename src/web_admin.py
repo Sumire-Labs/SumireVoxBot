@@ -1,3 +1,6 @@
+import os
+
+from dotenv import load_dotenv
 from fastapi import FastAPI, Request, Form, Depends, HTTPException, status
 from fastapi.responses import HTMLResponse, RedirectResponse
 from fastapi.templating import Jinja2Templates
@@ -11,8 +14,9 @@ security = HTTPBasic()
 vv_client = None
 
 # 認証用のIDとパスワード（好きなものに変えてください）
-ADMIN_USER = "admin"
-ADMIN_PASS = "sumire-password-2026"
+load_dotenv()
+ADMIN_USER = os.getenv("ADMIN_USER")
+ADMIN_PASS = os.getenv("ADMIN_PASSWORD")
 
 def authenticate(credentials: HTTPBasicCredentials = Depends(security)):
     correct_username = secrets.compare_digest(credentials.username, ADMIN_USER)
