@@ -176,6 +176,35 @@ class Voice(commands.Cog):
 
         return await interaction.response.send_message(msg)
 
+    @app_commands.command(name="remove_word", description="辞書から単語を削除します")
+    @app_commands.describe(word="削除する単語", is_global="管理者のみ: 全サーバー共通辞書から削除するか")
+    async def remove_word(self, interaction: discord.Interaction, word: str, is_global: bool = False):
+        if is_global:
+            if not await self.bot.is_owner(interaction.user):
+                return await interaction.response.send_message("❌ グローバル辞書の編集権限がありません。",
+                                                               ephemeral=True)
+            success = await self.bot.db.remove_global_word(word)
+        else:
+            success = await self.bot.db.remove_guild_word(interaction.guild.id, word)
+
+        if success:
+            return await interaction.response.send_message(f"🗑️ `{word}` を辞書から削除しました。")
+        else:
+            return await interaction.response.send_message(f"⚠️ `{word}` は辞書に登録されていません。", ephemeral=True)
+
+    @app_commands.command(name="dictionary", description="辞書に登録されている単語一覧を表示します")
+    async def dictionary(self, interaction: discord.Interaction):
+        guild_rows = await self.bot.db.get_guild_words(interaction.guild.id)
+
+        def format_rows(rows):
+            if not rows: return "登録なし"
+            return "\n".join([f"・`{r['word']}` → `{r['reading']}`" for r in rows])
+
+        embed = discord.Embed(title="📖 辞書一覧", color=discord.Color.blue())
+        embed.add_field(name="🏠 サーバー辞書", value=format_rows(guild_rows), inline=False)
+
+        await interaction.response.send_message(embed=embed)
+
 
 async def setup(bot):
     await bot.add_cog(Voice(bot))
