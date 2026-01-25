@@ -37,12 +37,14 @@ async def index(request: Request):
 
 @app.post("/add")
 async def add_word(word: str = Form(...), reading: str = Form(...), username: str = Depends(authenticate)):
-    # 1. 単語（表記）は大文字小文字の揺れを防ぐため小文字化
+    # 1. 前後の空白を削除 (.strip())
+    word = word.strip()
+    reading = reading.strip()
+
+    # 2. 表記を小文字化して揺れを防止
     normalized_word = word.lower()
 
-    # 2. 読みを全角カタカナに変換
-    # h2z: 半角を全角へ (カナ、数字、アルファベット)
-    # hira2kata: ひらがなをカタカナへ
+    # 3. 読みを全角カタカナに変換 (jaconv)
     normalized_reading = jaconv.h2z(reading, kana=True, digit=False, ascii=False)
     normalized_reading = jaconv.hira2kata(normalized_reading)
 

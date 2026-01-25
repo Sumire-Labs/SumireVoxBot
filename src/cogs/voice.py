@@ -4,6 +4,7 @@ from discord.ext import commands
 import os
 import asyncio
 import re
+import jaconv
 
 
 def is_katakana(text: str) -> bool:
@@ -190,15 +191,22 @@ class Voice(commands.Cog):
     @app_commands.command(name="add_word", description="単語を辞書に登録します")
     @app_commands.describe(word="登録する単語", reading="読み方（カタカナのみ）")
     async def add_word(self, interaction: discord.Interaction, word: str, reading: str):
+        # スペース削除と変換
+        word = word.strip()
+        reading = reading.strip()
+
         normalized_reading = jaconv.h2z(reading, kana=True, digit=False, ascii=False)
         normalized_reading = jaconv.hira2kata(normalized_reading)
 
-        # 変換後、念のためカタカナ以外の文字（漢字や英字）が混じっていないかチェック
+        # 最終チェック
         if not is_katakana(normalized_reading):
             return await interaction.response.send_message(
                 "❌ 読み方は「ひらがな」または「カタカナ」で入力してください。",
                 ephemeral=True
             )
+
+        if not word:
+            return await interaction.response.send_message("❌ 単語を入力してください。", ephemeral=True)
 
         await self.bot.db.set_guild_word(interaction.guild.id, word, normalized_reading)
         return await interaction.response.send_message(f"🏠 サーバー辞書に登録しました: `{word}` → `{normalized_reading}`")
