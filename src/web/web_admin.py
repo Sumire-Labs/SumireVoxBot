@@ -10,7 +10,7 @@ import uvicorn
 import secrets
 
 app = FastAPI()
-templates = Jinja2Templates(directory="src/templates")
+templates = Jinja2Templates(directory="src/web/templates")
 security = HTTPBasic()
 vv_client = None
 
@@ -18,6 +18,7 @@ vv_client = None
 load_dotenv()
 ADMIN_USER = os.getenv("ADMIN_USER")
 ADMIN_PASS = os.getenv("ADMIN_PASSWORD")
+
 
 def authenticate(credentials: HTTPBasicCredentials = Depends(security)):
     correct_username = secrets.compare_digest(credentials.username, ADMIN_USER)
@@ -30,10 +31,12 @@ def authenticate(credentials: HTTPBasicCredentials = Depends(security)):
         )
     return credentials.username
 
+
 @app.get("/", response_class=HTMLResponse)
 async def index(request: Request):
     user_dict = await vv_client.get_user_dict()
     return templates.TemplateResponse("index.html", {"request": request, "user_dict": user_dict})
+
 
 @app.post("/add")
 async def add_word(word: str = Form(...), reading: str = Form(...), username: str = Depends(authenticate)):
@@ -69,15 +72,30 @@ async def add_word(word: str = Form(...), reading: str = Form(...), username: st
 
     return RedirectResponse(url="/", status_code=303)
 
+
 @app.post("/delete/{uuid}")
 async def delete_word(uuid: str):
     await vv_client.delete_user_dict(uuid)
     return RedirectResponse(url="/", status_code=303)
 
-async def run_web_admin(client):
-    global vv_client
-    vv_client = client
-    # 外部からアクセスする場合は host="0.0.0.0" にします
-    config = uvicorn.Config(app, host="0.0.0.0", port=8080, log_level="info")
-    server = uvicorn.Server(config)
-    await server.serve()
+class WebAdminServer:
+    def __init__(self, client):
+        global vv_client
+        vv_client = client
+        # 設定を保持
+        self.config = uvicorn.Config(
+            app,
+            host="0.0.0.0",
+            port=8080,
+            log_level="warning"  # ログをスッキリさせたい場合はwarningに
+        )
+        self.server = uvicorn.Server(self.config)
+
+    async def run(self):
+        """Webサーバーを起動する"""
+        await self.server.serve()
+
+    async def stop(self):
+        """Webサーバーを安全に停止する"""
+        self.server.should_exit = True
+        await self.server.shutdown()

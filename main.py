@@ -12,7 +12,7 @@ from rich import box
 
 from src.core.voicevox_client import VoicevoxClient
 from src.core.database import Database
-from src.web.web_admin import run_web_admin
+from src.web.web_admin import WebAdminServer
 
 # ロガーのセットアップ
 logger = setup_logger()
@@ -36,13 +36,14 @@ class SumireVox(commands.Bot):
         )
         self.vv_client = VoicevoxClient()
         self.db = Database()
+        self.web_admin = WebAdminServer(self.vv_client)
 
     async def setup_hook(self) -> None:
         logger.info("初期化シーケンスを開始します...")
 
         await self.db.init_db()
         # Web管理画面のタスク開始
-        asyncio.create_task(run_web_admin(self.vv_client))
+        asyncio.create_task(self.web_admin.run())
 
         logger.info("Cogs の読み込みを開始します")
         for cog in cogs:
@@ -74,6 +75,9 @@ class SumireVox(commands.Bot):
 
     async def close(self) -> None:
         logger.warning("シャットダウンシーケンスを開始します...")
+
+        await self.web_admin.stop()
+        logger.info("Web管理画面を終了しました")
         await self.vv_client.close()
         logger.success("VOICEVOX セッションを終了しました")
         await self.db.close()
