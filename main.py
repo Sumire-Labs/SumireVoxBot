@@ -3,6 +3,7 @@ import discord
 from discord.ext import commands
 import os
 from dotenv import load_dotenv
+from aioconsole import ainput
 
 # ロガー関連のインポート
 from src.utils.logger import setup_logger, console
@@ -51,7 +52,25 @@ class SumireVox(commands.Bot):
             except Exception as e:
                 logger.error(f"Failed to load {cog}: {e}")
 
-        logger.info("スラッシュコマンドの同期が完了しました")
+        asyncio.create_task(self.watch_keystroke())
+        logger.info("キーボード入力を監視中: 's' キー + Enter でコマンドを同期します")
+
+    async def watch_keystroke(self):
+        """ターミナルからの入力を監視するタスク"""
+        while True:
+            # 入力を非同期で待機
+            line = await ainput()
+            if line.strip().lower() == 's':
+                logger.info("サーバー側からのリクエストにより同期を開始します...")
+                try:
+                    synced = await self.tree.sync()
+                    logger.success(f"{len(synced)} 個のコマンドを同期しました！")
+                except Exception as e:
+                    logger.error(f"同期エラー: {e}")
+            elif line.strip().lower() == 'q':
+                logger.warning("終了コマンドを受信しました。Botを停止します。")
+                await self.close()
+                break
 
     async def close(self) -> None:
         logger.warning("シャットダウンシーケンスを開始します...")
