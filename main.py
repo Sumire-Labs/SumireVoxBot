@@ -41,12 +41,12 @@ class SumireVox(commands.Bot):
             intents=intents,
             help_command=None
         )
-        self._ready_logged = None
-        self.web_admin_task = None # type: asyncio.Task or None
-        self.keystroke_task = None # type: asyncio.Task or None
-        self.vv_client = VoicevoxClient()
-        self.db = Database()
-        self.web_admin = WebAdminServer(self.vv_client)
+        self._ready_logged: bool | None = None
+        self.web_admin_task: asyncio.Task | None = None
+        self.keystroke_task: asyncio.Task | None = None
+        self.vv_client: VoicevoxClient | None = VoicevoxClient()
+        self.db: Database | None = Database()
+        self.web_admin: WebAdminServer | None = WebAdminServer(self.vv_client)
 
     async def setup_hook(self) -> None:
         logger.info("初期化シーケンスを開始します...")
