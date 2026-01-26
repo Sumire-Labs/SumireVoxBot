@@ -93,12 +93,24 @@ class SumireVox(commands.Bot):
     async def close(self) -> None:
         logger.warning("シャットダウンシーケンスを開始します...")
 
-        await self.web_admin.stop()
-        logger.info("Web管理画面を終了しました")
-        await self.vv_client.close()
-        logger.success("VOICEVOX セッションを終了しました")
-        await self.db.close()
-        logger.success("データベース接続を終了しました")
+        try:
+            await self.web_admin.stop()
+            logger.info("Web管理画面を終了しました")
+        except Exception as e:
+            logger.error(f"Web管理画面の終了に失敗: {e}")
+
+        try:
+            await self.vv_client.close()
+            logger.success("VOICEVOX セッションを終了しました")
+        except Exception as e:
+            logger.error(f"VOICEVOXセッションの終了に失敗: {e}")
+
+        try:
+            await self.db.close()
+            logger.success("データベース接続を終了しました")
+        except Exception as e:
+            logger.error(f"データベース接続の終了に失敗: {e}")
+
         await super().close()
         logger.success("Discord セッションを終了しました")
 
