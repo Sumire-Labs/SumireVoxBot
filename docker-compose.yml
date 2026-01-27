@@ -1,5 +1,18 @@
 version: "3.8"
 services:
+  bot:
+    build: .
+    container_name: sumire_vox_bot
+    depends_on:
+      - db
+      - voicevox_engine
+    links:
+      - db
+      - voicevox_engine
+    env_file:
+      - .env
+    networks:
+      - sumire_vox_network
   voicevox_engine:
     image: voicevox/voicevox_engine:cpu-ubuntu20.04-latest
     container_name: voicevox_engine
@@ -8,6 +21,8 @@ services:
     restart: unless-stopped
     volumes:
       - ./voicevox_config:/root/.local/share/voicevox_engine
+    networks:
+      - sumire_vox_network
   db:
     image: postgres:15
     container_name: sumire_vox_db
@@ -20,3 +35,8 @@ services:
       - "5432:5432"
     volumes:
       - ./postgres_data:/var/lib/postgresql/data
+    networks:
+      - sumire_vox_network
+networks:
+  sumire_vox_network:
+    driver: bridge
