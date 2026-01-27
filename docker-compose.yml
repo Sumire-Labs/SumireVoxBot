@@ -3,6 +3,8 @@ services:
   bot:
     build: .
     container_name: sumire_vox_bot
+    volumes:
+      - .:/app
     depends_on:
       - db
       - voicevox_engine
@@ -13,6 +15,8 @@ services:
       - .env
     networks:
       - sumire_vox_network
+    ports:
+      - "8080:8080"
   voicevox_engine:
     image: voicevox/voicevox_engine:cpu-ubuntu20.04-latest
     container_name: voicevox_engine
