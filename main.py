@@ -30,7 +30,8 @@ DEFAULT_VOICEVOX_HOST: str = "127.0.0.1"
 DEFAULT_VOICEVOX_PORT: int = 50021
 
 COGS: list[str] = [
-    "src.cogs.voice"
+    "src.cogs.voice",
+    "src.cogs.commands"
 ]
 
 
