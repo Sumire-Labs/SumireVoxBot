@@ -1,18 +1,19 @@
+# 修正案：キャッシュ効率を上げる
 FROM python:3.14-slim
 
-# 作業ディレクトリの設定
 WORKDIR /app
 
-# 依存関係のコピーとインストール
-COPY requirements.txt .
+# 先にシステムパッケージをインストール（ここは滅多に変わらないのでキャッシュさせる）
 RUN apt-get update && \
     apt-get install -y --no-install-recommends ffmpeg && \
-    rm -rf /var/lib/apt/lists/* && \
-    pip install --no-cache-dir --upgrade pip && \
+    rm -rf /var/lib/apt/lists/*
+
+# requirementsだけ先にコピーしてインストール
+COPY requirements.txt .
+RUN pip install --no-cache-dir --upgrade pip && \
     pip install --no-cache-dir -r requirements.txt
 
-# ソースコードのコピー
+# 最後にソースコードをコピー（コードを書き換えるたびにここより下が実行される）
 COPY . .
 
-# 実行
 CMD ["python", "main.py"]
