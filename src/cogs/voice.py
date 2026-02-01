@@ -155,6 +155,11 @@ class Voice(commands.Cog):
         settings = await self.bot.db.get_guild_settings(message.guild.id)
         content = message.clean_content
 
+        # メンション読み上げ
+        if settings.read_mention:
+            for mention in message.mentions:
+                content = content.replace(f"@{mention.display_name}", f"メンション{mention.display_name}")
+
         # コードブロックを省略
         if settings.skip_code_blocks:
             content = re.sub(r"```.*?```", "、コードブロック省略、", content, flags=re.DOTALL)
