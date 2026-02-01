@@ -84,7 +84,11 @@ class Voice(commands.Cog):
                     )
 
                     if guild.voice_client:
-                        source = discord.FFmpegPCMAudio(file_path)
+                        source = discord.FFmpegPCMAudio(
+                            file_path,
+                            options="-vn -loglevel quiet",
+                            before_options="-loglevel quiet",
+                        )
                         stop_event = asyncio.Event()
                         guild.voice_client.play(
                             source,
