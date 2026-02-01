@@ -14,4 +14,4 @@ loguru
 aioconsole
 pydantic
 ffmpeg
-pykakasi
+romkan2
