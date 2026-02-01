@@ -8,6 +8,7 @@ import jaconv
 from loguru import logger
 import romkan2
 from dotenv import load_dotenv
+from src.utils.views import ConfigSearchView
 
 
 def is_katakana(text: str) -> bool:
@@ -56,37 +57,6 @@ class Voice(commands.Cog):
                 pattern = re.compile(re.escape(word), re.IGNORECASE)
                 content = pattern.sub(words[word], content)
         return content
-    
-    async def show_current_config(self, interaction: discord.Interaction):
-        """現在のサーバー設定を表示する"""
-        try:
-            settings = await self.bot.db.get_guild_settings(interaction.guild.id)
-
-            embed = discord.Embed(
-                title="⚙️ 現在のサーバー設定",
-                color=discord.Color.blue(),
-                description=f"サーバー: {interaction.guild.name}"
-            )
-
-            embed.add_field(name="自動接続", value="✅ 有効" if settings.auto_join else "❌ 無効", inline=True)
-            embed.add_field(name="文字数制限", value=f"{settings.max_chars}文字", inline=True)
-            embed.add_field(name="入退出の読み上げ", value="✅ 有効" if settings.read_vc_status else "❌ 無効",
-                            inline=True)
-            embed.add_field(name="メンション読み上げ", value="✅ 有効" if settings.read_mention else "❌ 無効",
-                            inline=True)
-            embed.add_field(name="さん付け", value="✅ 有効" if settings.add_suffix else "❌ 無効", inline=True)
-            embed.add_field(name="ローマ字読み", value="✅ 有効" if settings.read_romaji else "❌ 無効", inline=True)
-            embed.add_field(name="添付ファイルの読み上げ", value="✅ 有効" if settings.read_attachments else "❌ 無効",
-                            inline=True)
-            embed.add_field(name="コードブロックの省略", value="✅ 有効" if settings.skip_code_blocks else "❌ 無効",
-                            inline=True)
-            embed.add_field(name="URLの省略", value="✅ 有効" if settings.skip_urls else "❌ 無効", inline=True)
-
-            await interaction.response.send_message(embed=embed)
-
-        except Exception as e:
-            logger.error(f"[{interaction.guild.id}] 設定の取得に失敗しました: {e}")
-            await interaction.response.send_message("❌ 設定の取得中にエラーが発生しました。", ephemeral=True)
 
     @logger.catch()
     async def play_next(self, guild_id: int):
@@ -433,71 +403,40 @@ class Voice(commands.Cog):
             await interaction.response.send_message("❌ 辞書一覧の表示中にエラーが発生しました。", ephemeral=True)
 
     @app_commands.command(name="config", description="サーバーごとの読み上げ設定を変更します")
-    @app_commands.describe(
-        item="設定する項目を選んでください",
-        value="ONならTrue、OFFならFalse、または数値を入力してください"
-    )
-    @app_commands.choices(item=[
-        app_commands.Choice(name="現在の設定の表示 (None)", value="show_current_config"),
-        app_commands.Choice(name="自動接続 (True/False)", value="auto_join"),
-        app_commands.Choice(name="文字数制限 (10-500)", value="max_chars"),
-        app_commands.Choice(name="入退出の読み上げ (True/False)", value="read_vc_status"),
-        app_commands.Choice(name="メンション読み上げ (True/False)", value="read_mention"),
-        app_commands.Choice(name="さん付け (True/False)", value="add_suffix"),
-        app_commands.Choice(name="ローマ字読み (True/False)", value="read_romaji"),
-        app_commands.Choice(name="添付ファイルの読み上げ (True/False)", value="read_attachments"),
-        app_commands.Choice(name="コードブロックの省略(True/False)", value="skip_code_blocks"),
-        app_commands.Choice(name="URLの省略(True/False)", value="skip_urls"),
-    ])
-    async def config(self, interaction: discord.Interaction, item: str, value: str):
-        # 現在の設定を表示する特別なケース
-        if item == "show_current_config":
-            return await self.show_current_config(interaction)
-
-        # valueが指定されていない場合はエラー
-        if value is None:
-            return await interaction.response.send_message("❌ 値を指定してください。", ephemeral=True)
-
-        # 1. 現在の設定を取得（なければデフォルト値が返る）
-        settings = await self.bot.db.get_guild_settings(interaction.guild.id)
-
-        logger.debug(f"サーバー設定の更新を行います...現在の設定: {settings}")
+    async def config(self, interaction: discord.Interaction):
+        try:
+            settings = await self.bot.db.get_guild_settings(interaction.guild.id)
+        except Exception as e:
+            logger.error(f"[{interaction.guild.id}] サーバー設定の取得に失敗しました: {e}")
+            return await interaction.response.send_message("❌ サーバー設定の取得中にエラーが発生しました。",
+                                                           ephemeral=True)
 
         try:
-            # 現在の値を取得（表示用）
-            old_value = getattr(settings, item)
-
-            # 2. 値の型変換
-            if isinstance(old_value, bool):
-                # bool型の場合の変換
-                new_value = value.lower() in ("true", "yes", "on", "1", "有効", "きおん")
-            elif isinstance(old_value, int):
-                # int型の場合の変換
-                if not value.isdigit():
-                    return await interaction.response.send_message("❌ 数値を入力してください。", ephemeral=True)
-                new_value = int(value)
-            else:
-                new_value = value
-
-            # 3. 値の反映とバリデーション
-            # Pydanticモデルを更新（ここで ge=10 などの制約がチェックされる）
-            setattr(settings, item, new_value)
-
-            # 4. データベースへ保存（UPSERTなので新規でも更新でもOK）
-            await self.bot.db.set_guild_settings(interaction.guild.id, settings)
-
-            await interaction.response.send_message(
-                f"✅ 設定を更新しました：**{item}**\n"
-                f"値：`{old_value}` ➡ **`{new_value}`**"
+            embed = discord.Embed(
+                title="⚙️ サーバー設定",
+                description="現在の設定値は以下の通りです。変更するには下のメニューから項目を選択してください。",
+                color=discord.Color.blue()
             )
 
+            embed.add_field(name="自動接続", value="✅ 有効" if settings.auto_join else "❌ 無効", inline=True)
+            embed.add_field(name="文字数制限", value=f"{settings.max_chars}文字", inline=True)
+            embed.add_field(name="入退出の読み上げ", value="✅ 有効" if settings.read_vc_status else "❌ 無効",
+                            inline=True)
+            embed.add_field(name="メンション読み上げ", value="✅ 有効" if settings.read_mention else "❌ 無効",
+                            inline=True)
+            embed.add_field(name="さん付け", value="✅ 有効" if settings.add_suffix else "❌ 無効", inline=True)
+            embed.add_field(name="ローマ字読み", value="✅ 有効" if settings.read_romaji else "❌ 無効", inline=True)
+            embed.add_field(name="添付ファイルの読み上げ", value="✅ 有効" if settings.read_attachments else "❌ 無効",
+                            inline=True)
+            embed.add_field(name="コードブロックの省略", value="✅ 有効" if settings.skip_code_blocks else "❌ 無効",
+                            inline=True)
+            embed.add_field(name="URLの省略", value="✅ 有効" if settings.skip_urls else "❌ 無効", inline=True)
+
+            view = ConfigSearchView(self.bot.db)
+            await interaction.response.send_message(embed=embed, view=view, ephemeral=True)
         except Exception as e:
-            # Pydanticのバリデーションエラーなどのハンドリング
-            logger.error(f"Config update failed: {e}")
-            await interaction.response.send_message(
-                f"❌ 設定の更新に失敗しました。正しい値を入力してください。\n(エラー内容: {e})",
-                ephemeral=True
-            )
+            logger.error(f"[{interaction.guild.id}] 設定画面の表示に失敗しました: {e}")
+            await interaction.response.send_message("❌ 設定画面の表示中にエラーが発生しました。", ephemeral=True)
 
 
 async def setup(bot):
