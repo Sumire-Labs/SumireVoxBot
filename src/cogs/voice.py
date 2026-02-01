@@ -143,6 +143,49 @@ class Voice(commands.Cog):
         await stop_event.wait()
         logger.info(f"[{guild.id}] 再生完了: {normalized_text[:15]}")
 
+    @commands.Cog.listener(name="on_voice_state_update")
+    async def on_vc_notification(self, member: discord.Member, before: discord.VoiceState, after: discord.VoiceState):
+        """ユーザーの入退出を検知して読み上げる"""
+        try:
+            # Bot自身や、BotがVCに参加していない場合は無視
+            if member.bot or not member.guild.voice_client:
+                return
+
+            bot_vc = member.guild.voice_client.channel
+
+            try:
+                settings = await self.bot.db.get_guild_settings(member.guild.id)
+            except Exception as e:
+                logger.error(f"[{member.guild.id}] サーバー設定の取得に失敗しました: {e}")
+                return
+
+            # 設定が無効なら終了
+            if not settings.read_vc_status:
+                return
+
+            content = None
+            # 入室: 以前のチャンネルがBotのVCではなく、現在のチャンネルがBotのVCである場合
+            if before.channel != bot_vc and after.channel == bot_vc:
+                suffix = "さん" if settings.add_suffix else ""
+                content = f"{member.display_name}{suffix}が入室しました"
+            # 退出: 以前のチャンネルがBotのVCで、現在のチャンネルがBotのVCではなくなった場合
+            elif before.channel == bot_vc and after.channel != bot_vc:
+                suffix = "さん" if settings.add_suffix else ""
+                content = f"{member.display_name}{suffix}が退室しました"
+
+            if content:
+                try:
+                    queue = self.get_queue(member.guild.id)
+                    # ユーザーのデフォルト設定（speakerなど）を使用するためmember.idを渡す
+                    await queue.put((content, member.id))
+
+                    if not self.is_processing[member.guild.id]:
+                        asyncio.create_task(self.play_next(member.guild.id))
+                except Exception as e:
+                    logger.error(f"[{member.guild.id}] VC通知のキューイングに失敗しました: {e}")
+        except Exception as e:
+            logger.error(f"[{member.guild.id}] VC通知処理中にエラーが発生しました: {e}")
+
     @commands.Cog.listener(name="on_message")
     async def read_message(self, message: discord.Message):
         if message.author.bot or not message.guild or not message.guild.voice_client:
@@ -177,7 +220,6 @@ class Voice(commands.Cog):
             content = romkan2.to_hiragana(content)
 
         # 長文対策
-        settings = await self.bot.db.get_guild_settings(message.guild.id)
         limit: int = 50
         if settings.max_chars:
             limit = settings.max_chars
