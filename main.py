@@ -13,7 +13,6 @@ from rich import box
 
 from src.core.voicevox_client import VoicevoxClient
 from src.core.database import Database
-from src.web.web_admin import WebAdminServer
 
 # ロガーのセットアップ
 logger = setup_logger()
@@ -47,7 +46,6 @@ class SumireVox(commands.Bot):
         self.keystroke_task: asyncio.Task | None = None
         self.vv_client: VoicevoxClient | None = VoicevoxClient()
         self.db: Database | None = Database()
-        self.web_admin: WebAdminServer | None = WebAdminServer(self.vv_client)
 
     async def setup_hook(self) -> None:
         logger.info("初期化シーケンスを開始します...")
@@ -140,9 +138,6 @@ class SumireVox(commands.Bot):
             return
         _ready_logged = True
 
-        web_port = os.getenv("WEB_ADMIN_PORT", DEFAULT_WEB_PORT)
-        web_url = f"http://localhost:{web_port}"
-
         vv_host = os.getenv("VOICEVOX_HOST", DEFAULT_VOICEVOX_HOST)
         vv_port = os.getenv("VOICEVOX_PORT", DEFAULT_VOICEVOX_PORT)
         vv_url = f"http://{vv_host}:{vv_port}"
@@ -163,8 +158,7 @@ class SumireVox(commands.Bot):
         table.add_row("ログインユーザー", f"{self.user} ({self.user.id})")
         table.add_row("接続サーバー数", f"{len(self.guilds)} guilds")
 
-        # 管理画面とエンジンの情報を表示
-        table.add_row("Web管理画面", f"[link={web_url}]{web_url}[/link] (User: {admin_user})")
+        # エンジンの情報を表示
         table.add_row("VOICEVOX Engine", f"[link={vv_url}]{vv_url}[/link]")
         table.add_row("外部アクセス", "[yellow]無効 (Localhost Only)[/yellow]")
 
