@@ -477,6 +477,17 @@ class Voice(commands.Cog):
 
     @app_commands.command(name="config", description="サーバーごとの読み上げ設定を変更します")
     async def config(self, interaction: discord.Interaction):
+        # サーバー管理権限またはBotの作成者かチェック
+        is_admin = interaction.user.guild_permissions.manage_guild
+        is_owner = await self.bot.is_owner(interaction.user)
+
+        if not (is_admin or is_owner):
+            await interaction.response.send_message(
+                "❌ このコマンドを実行するには、「サーバー管理」権限が必要です。",
+                ephemeral=True
+            )
+            return
+
         try:
             settings = await self.bot.db.get_guild_settings(interaction.guild.id)
             embed = self.create_config_embed(interaction.guild, settings)
