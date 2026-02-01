@@ -65,13 +65,6 @@ class SumireVox(commands.Bot):
             logger.error(f"データベースの初期化に失敗しました: {e}")
             raise
 
-        try:
-            self.web_admin_task = asyncio.create_task(self.web_admin.run())
-            logger.success("Web管理画面の起動タスクを作成しました")
-        except Exception as e:
-            logger.error(f"Web管理画面の起動に失敗しました: {e}")
-            raise
-
         logger.info("Cogs の読み込みを開始します")
         for cog in COGS:
             try:
@@ -80,43 +73,8 @@ class SumireVox(commands.Bot):
             except Exception as e:
                 logger.error(f"{cog} の読み込みに失敗しました: {e}")
 
-        self.keystroke_task = asyncio.create_task(self.watch_keystroke())
-        logger.info(
-            f"キーボード監視を開始します"
-            f"SYNC: {SYNC_KEY}, QUIT: {QUIT_KEY}"
-        )
-
-    async def watch_keystroke(self):
-        """ターミナルからの入力を監視するタスク"""
-        while True:
-            try:
-                line = await ainput()
-                if line.strip().lower() == SYNC_KEY:
-                    logger.info("サーバー側からのリクエストにより同期を開始します...")
-                    try:
-                        synced = await self.tree.sync()
-                        logger.success(f"{len(synced)} 個のコマンドを同期しました！")
-                    except Exception as e:
-                        logger.error(f"同期エラー: {e}")
-                elif line.strip().lower() == QUIT_KEY:
-                    logger.warning("終了コマンドを受信しました。Botを停止します。")
-                    await self.close()
-                    break
-            except EOFError:
-                logger.info("入力ストリームが閉じられました")
-                break
-            except Exception as e:
-                logger.error(f"入力監視中にエラーが発生: {e}")
-                await asyncio.sleep(1)
-
     async def close(self) -> None:
         logger.warning("シャットダウンシーケンスを開始します...")
-
-        try:
-            await self.web_admin.stop()
-            logger.info("Web管理画面を終了しました")
-        except Exception as e:
-            logger.error(f"Web管理画面の終了に失敗: {e}")
 
         try:
             await self.vv_client.close()
