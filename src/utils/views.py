@@ -173,10 +173,18 @@ class ConfigSearchView(discord.ui.View):
             discord.SelectOption(label="コードブロック", value="skip_code_blocks", description="コードをスキップするか",
                                  emoji="💻"),
             discord.SelectOption(label="URL省略", value="skip_urls", description="URLを省略して読むか", emoji="🔗"),
+            discord.SelectOption(label="設定パネルを閉じる", value="close", description="このメッセージを削除します", emoji="🗑️")
         ]
     )
     async def select_item(self, interaction: discord.Interaction, select: discord.ui.Select):
         item_key = select.values[0]
+
+        if item_key == "close":
+            try:
+                await interaction.message.delete()
+            except Exception:
+                await interaction.response.edit_message(content="✅ パネルを閉じました。", embed=None, view=None)
+            return
 
         if item_key == "auto_join":
             return await interaction.response.send_message(
