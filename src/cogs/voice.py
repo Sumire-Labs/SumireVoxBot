@@ -64,44 +64,51 @@ class Voice(commands.Cog):
         try:
             while not queue.empty():
                 text, author_id = await queue.get()
-
-                # DBからユーザー設定を読み込む
-                s = await self.bot.db.get_user_setting(author_id)
-
-                file_path = f"{self.temp_dir}/audio_{guild_id}.wav"
                 try:
-                    # kana, digit, ascii すべてを全角(h2z)にし、英字は小文字(lower)にする
-                    normalized_text = jaconv.h2z(text, kana=True, digit=True, ascii=True).lower()
-
-                    logger.debug(f"[{guild_id}] 音声生成開始: {normalized_text[:20]}...")
-
-                    await self.bot.vv_client.generate_sound(
-                        text=normalized_text,
-                        speaker_id=s["speaker"],
-                        speed=s["speed"],
-                        pitch=s["pitch"],
-                        output_path=file_path
-                    )
-
-                    if guild.voice_client:
-                        source = discord.FFmpegPCMAudio(
-                            file_path,
-                            options="-vn -loglevel quiet",
-                            before_options="-loglevel quiet",
-                        )
-                        stop_event = asyncio.Event()
-                        guild.voice_client.play(
-                            source,
-                            after=lambda e: self.bot.loop.call_soon_threadsafe(stop_event.set)
-                        )
-                        await stop_event.wait()
-                        logger.info(f"[{guild_id}] 再生完了: {normalized_text[:15]}")
+                    await self._process_and_play(guild, text, author_id)
                 except Exception as e:
                     logger.error(f"[{guild_id}] 再生中にエラーが発生しました: {e}")
                 finally:
                     queue.task_done()
         finally:
             self.is_processing[guild_id] = False
+
+    async def _process_and_play(self, guild, text, author_id):
+        """1つのテキストを処理して再生する内部メソッド"""
+        # DBからユーザー設定を読み込む
+        s = await self.bot.db.get_user_setting(author_id)
+        file_path = f"{self.temp_dir}/audio_{guild.id}.wav"
+
+        # 正規化処理
+        normalized_text = jaconv.h2z(text, kana=True, digit=True, ascii=True).lower()
+        logger.debug(f"[{guild.id}] 音声生成開始: {normalized_text[:20]}...")
+
+        # 音声生成
+        await self.bot.vv_client.generate_sound(
+            text=normalized_text,
+            speaker_id=s["speaker"],
+            speed=s["speed"],
+            pitch=s["pitch"],
+            output_path=file_path
+        )
+
+        # ボイスチャットに接続していない場合はスキップ
+        if not guild.voice_client:
+            return
+
+        # 再生処理
+        source = discord.FFmpegPCMAudio(
+            file_path,
+            options="-vn -loglevel quiet",
+            before_options="-loglevel quiet",
+        )
+        stop_event = asyncio.Event()
+        guild.voice_client.play(
+            source,
+            after=lambda e: self.bot.loop.call_soon_threadsafe(stop_event.set)
+        )
+        await stop_event.wait()
+        logger.info(f"[{guild.id}] 再生完了: {normalized_text[:15]}")
 
     @commands.Cog.listener(name="on_message")
     async def read_message(self, message: discord.Message):
