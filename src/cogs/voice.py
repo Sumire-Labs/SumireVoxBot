@@ -283,7 +283,12 @@ class Voice(commands.Cog):
                 # 通知メッセージ（任意）
                 tc = member.guild.get_channel(target_tc_id)
                 if tc:
-                    await tc.send(f"✅ **{after.channel.name}** への入室を検知したため、自動接続しました。")
+                    embed = discord.Embed(
+                        title="✅ 自動接続しました",
+                        description=f"**{after.channel.name}** への入室を検知したため、自動接続しました。",
+                        color=discord.Color.green()
+                    )
+                    await tc.send(embed=embed)
             except Exception as e:
                 logger.error(f"[{member.guild.id}] 自動接続に失敗しました: {e}")
 
@@ -319,10 +324,19 @@ class Voice(commands.Cog):
             channel = interaction.user.voice.channel
             await channel.connect()
             logger.success(f"[{interaction.guild.id}] {channel.name} に接続しました。")
-            await interaction.response.send_message(
-                f"✅ {channel.name} に接続しました。このチャンネルのチャットを読み上げます。")
+            embed=discord.Embed(
+                title="✅ 接続しました",
+                description=f"**{channel.name}** に接続しました。\nこのチャンネルのチャットを読み上げます。",
+                color=discord.Color.green()
+            )
+            await interaction.response.send_message(embed=embed)
         else:
-            await interaction.response.send_message("❌ ボイスチャンネルに接続してから実行してください。", ephemeral=True)
+            embed = discord.Embed(
+                title="❌ 接続エラー",
+                description="ボイスチャンネルに接続してから実行してください。",
+                color=discord.Color.red()
+            )
+            await interaction.response.send_message(embed=embed, ephemeral=True)
 
     @app_commands.command(name="leave", description="切断して読み上げを終了します")
     async def leave(self, interaction: discord.Interaction):
@@ -332,9 +346,19 @@ class Voice(commands.Cog):
 
             await interaction.guild.voice_client.disconnect(force=True)
             logger.info(f"[{interaction.guild.id}] VCから切断しました。")
-            await interaction.response.send_message("👋 切断しました。")
+            embed = discord.Embed(
+                title="👋 切断しました",
+                description="ボイスチャンネルから切断しました。",
+                color=discord.Color.blue()
+            )
+            await interaction.response.send_message(embed=embed)
         else:
-            await interaction.response.send_message("❌ Botはボイスチャンネルに接続していません。", ephemeral=True)
+            embed = discord.Embed(
+                title="❌ 接続エラー",
+                description="Botはボイスチャンネルに接続していません。",
+                color=discord.Color.red()
+            )
+            await interaction.response.send_message(embed=embed, ephemeral=True)
 
     @app_commands.command(name="set_voice", description="自分の声をカスタマイズします")
     @app_commands.choices(speaker=[
@@ -371,12 +395,26 @@ class Voice(commands.Cog):
         pitch = max(-0.15, min(0.15, pitch))
 
         # DBに保存
-        await self.bot.db.set_user_setting(interaction.user.id, speaker, speed, pitch)
+        try:
+            await self.bot.db.set_user_setting(interaction.user.id, speaker, speed, pitch)
+        except Exception as e:
+            logger.error(f"音声設定の保存に失敗しました (user_id: {interaction.user.id}): {e}")
+            embed = discord.Embed(
+                title="❌ 保存エラー",
+                description="音声設定の保存中にエラーが発生しました。\nしばらく時間をおいてから再度お試しください。",
+                color=discord.Color.red()
+            )
+            return await interaction.response.send_message(embed=embed, ephemeral=True)
 
-        await interaction.response.send_message(
-            f"✅ {interaction.user.display_name}さんの音声を保存しました！\n"
-            f"速度: {speed} / ピッチ: {pitch}", ephemeral=True
+        embed = discord.Embed(
+            title="✅ 音声設定を保存しました",
+            description=f"{interaction.user.display_name}さんの音声設定を更新しました。",
+            color=discord.Color.green()
         )
+        embed.add_field(name="速度", value=f"`{speed}`", inline=True)
+        embed.add_field(name="ピッチ", value=f"`{pitch}`", inline=True)
+
+        return await interaction.response.send_message(embed=embed, ephemeral=True)
 
     @app_commands.command(name="add_word", description="単語を辞書に登録します")
     @app_commands.describe(word="登録する単語", reading="読み方（カタカナのみ）")
@@ -390,20 +428,35 @@ class Voice(commands.Cog):
             normalized_reading = jaconv.hira2kata(normalized_reading)
         except Exception as e:
             logger.error(f"[{interaction.guild.id}] 読み方の正規化に失敗しました: {e}")
+            embed = discord.Embed(
+                title="❌ 変換エラー",
+                description="読み方の変換中にエラーが発生しました。",
+                color=discord.Color.red()
+            )
             return await interaction.response.send_message(
-                "❌ 読み方の変換中にエラーが発生しました。",
+                embed=embed,
                 ephemeral=True
             )
 
         # 最終チェック
         if not is_katakana(normalized_reading):
+            embed = discord.Embed(
+                title="❌ 入力エラー",
+                description="読み方は「ひらがな」または「カタカナ」で入力してください。",
+                color=discord.Color.red()
+            )
             return await interaction.response.send_message(
-                "❌ 読み方は「ひらがな」または「カタカナ」で入力してください。",
+                embed=embed,
                 ephemeral=True
             )
 
         if not word:
-            return await interaction.response.send_message("❌ 単語を入力してください。", ephemeral=True)
+            embed = discord.Embed(
+                title="❌ 入力エラー",
+                description="単語を入力してください。",
+                color=discord.Color.red()
+            )
+            return await interaction.response.send_message(embed=embed, ephemeral=True)
 
         try:
             # 既存の辞書を取得
@@ -420,12 +473,21 @@ class Voice(commands.Cog):
             await self.bot.db.add_or_update_dict(interaction.guild.id, words_dict)
 
             logger.success(f"[{interaction.guild.id}] 辞書登録: {word} -> {normalized_reading}")
-            return await interaction.response.send_message(
-                f"🏠 サーバー辞書に登録しました: `{word}` → `{normalized_reading}`")
+            embed = discord.Embed(
+                title="🏠 サーバー辞書に登録しました",
+                description=f"`{word}` → `{normalized_reading}`",
+                color=discord.Color.green()
+            )
+            return await interaction.response.send_message(embed=embed)
         except Exception as e:
             logger.error(f"[{interaction.guild.id}] 辞書登録に失敗しました: {e}")
+            embed = discord.Embed(
+                title="❌ 辞書への登録に失敗しました",
+                description="辞書への登録中にエラーが発生しました。",
+                color=discord.Color.red()
+            )
             return await interaction.response.send_message(
-                "❌ 辞書への登録中にエラーが発生しました。",
+                embed=embed,
                 ephemeral=True
             )
 
@@ -438,36 +500,71 @@ class Voice(commands.Cog):
             words_dict = await self.bot.db.get_dict(interaction.guild.id)
         except Exception as e:
             logger.error(f"[{interaction.guild.id}] 辞書の取得に失敗しました: {e}")
-            return await interaction.response.send_message("❌ 辞書の取得中にエラーが発生しました。", ephemeral=True)
+            embed = discord.Embed(
+                title="❌ 辞書の取得エラー",
+                description="辞書の取得中にエラーが発生しました。",
+                color=discord.Color.red()
+            )
+            return await interaction.response.send_message(embed=embed, ephemeral=True)
 
         # 辞書が存在しない、または空の場合
         if not words_dict or not isinstance(words_dict, dict):
-            return await interaction.response.send_message(f"⚠️ `{word}` は辞書に登録されていません。", ephemeral=True)
+            embed = discord.Embed(
+                title="⚠️ 単語が見つかりません",
+                description=f"`{word}` は辞書に登録されていません。",
+                color=discord.Color.orange()
+            )
+            return await interaction.response.send_message(embed=embed, ephemeral=True)
 
         # 削除する単語が辞書に存在するかチェック
         if word not in words_dict:
-            return await interaction.response.send_message(f"⚠️ `{word}` は辞書に登録されていません。", ephemeral=True)
+            embed = discord.Embed(
+                title="⚠️ 単語が見つかりません",
+                description=f"`{word}` は辞書に登録されていません。",
+                color=discord.Color.orange()
+            )
+            return await interaction.response.send_message(embed=embed, ephemeral=True)
 
         # 辞書から単語を削除
         try:
             del words_dict[word]
         except Exception as e:
             logger.error(f"[{interaction.guild.id}] 辞書からの単語削除に失敗しました: {e}")
-            return await interaction.response.send_message("❌ 辞書の更新中にエラーが発生しました。", ephemeral=True)
+            embed = discord.Embed(
+                title="❌ 辞書の更新エラー",
+                description="辞書の更新中にエラーが発生しました。",
+                color=discord.Color.red()
+            )
+            return await interaction.response.send_message(embed=embed, ephemeral=True)
 
         # 更新された辞書をDBに保存
         try:
             success = await self.bot.db.add_or_update_dict(interaction.guild.id, words_dict)
         except Exception as e:
             logger.error(f"[{interaction.guild.id}] 辞書の保存に失敗しました: {e}")
-            return await interaction.response.send_message("❌ 辞書の保存中にエラーが発生しました。", ephemeral=True)
+            embed = discord.Embed(
+                title="❌ 辞書の保存エラー",
+                description="辞書の保存中にエラーが発生しました。",
+                color=discord.Color.red()
+            )
+            return await interaction.response.send_message(embed=embed, ephemeral=True)
 
         if success:
             logger.success(f"[{interaction.guild.id}] 辞書削除: {word}")
-            return await interaction.response.send_message(f"🗑️ `{word}` を辞書から削除しました。")
+            embed = discord.Embed(
+                title="🗑️ 辞書から削除しました",
+                description=f"`{word}` を辞書から削除しました。",
+                color=discord.Color.green()
+            )
+            return await interaction.response.send_message(embed=embed)
         else:
             logger.warning(f"[{interaction.guild.id}] 辞書削除に失敗しました: {word}")
-            return await interaction.response.send_message(f"⚠️ 削除に失敗しました。", ephemeral=True)
+            embed = discord.Embed(
+                title="⚠️ 削除失敗",
+                description="削除に失敗しました。",
+                color=discord.Color.orange()
+            )
+            return await interaction.response.send_message(embed=embed, ephemeral=True)
 
     @app_commands.command(name="dictionary", description="辞書に登録されている単語一覧を表示します")
     async def dictionary(self, interaction: discord.Interaction):
@@ -475,7 +572,12 @@ class Voice(commands.Cog):
             guild_rows = await self.bot.db.get_dict(interaction.guild.id)
         except Exception as e:
             logger.error(f"[{interaction.guild.id}] 辞書の取得に失敗しました: {e}")
-            return await interaction.response.send_message("❌ 辞書の取得中にエラーが発生しました。", ephemeral=True)
+            embed = discord.Embed(
+                title="❌ 辞書の取得エラー",
+                description="辞書の取得中にエラーが発生しました。",
+                color=discord.Color.red()
+            )
+            return await interaction.response.send_message(embed=embed, ephemeral=True)
 
         try:
             embed = discord.Embed(title="📖 辞書一覧", color=discord.Color.blue())
@@ -484,7 +586,12 @@ class Voice(commands.Cog):
             await interaction.response.send_message(embed=embed)
         except Exception as e:
             logger.error(f"辞書一覧の送信に失敗しました: {e}")
-            await interaction.response.send_message("❌ 辞書一覧の表示中にエラーが発生しました。", ephemeral=True)
+            embed = discord.Embed(
+                title="❌ 辞書の表示エラー",
+                description="辞書一覧の表示中にエラーが発生しました。",
+                color=discord.Color.red()
+            )
+            await interaction.response.send_message(embed=embed, ephemeral=True)
 
     @app_commands.command(name="config", description="サーバーごとの読み上げ設定を変更します")
     async def config(self, interaction: discord.Interaction):
@@ -493,8 +600,13 @@ class Voice(commands.Cog):
         is_owner = await self.bot.is_owner(interaction.user)
 
         if not (is_admin or is_owner):
+            embed = discord.Embed(
+                title="❌ 権限エラー",
+                description="このコマンドを実行するには、「サーバー管理」権限が必要です。",
+                color=discord.Color.red()
+            )
             await interaction.response.send_message(
-                "❌ このコマンドを実行するには、「サーバー管理」権限が必要です。",
+                embed=embed,
                 ephemeral=True
             )
             return
@@ -507,7 +619,12 @@ class Voice(commands.Cog):
             view.message = await interaction.original_response()
         except Exception as e:
             logger.error(f"[{interaction.guild.id}] 設定画面の表示に失敗しました: {e}")
-            await interaction.response.send_message("❌ 設定画面の表示中にエラーが発生しました。", ephemeral=True)
+            embed = discord.Embed(
+                title="❌ 設定画面の表示エラー",
+                description="設定画面の表示中にエラーが発生しました。",
+                color=discord.Color.red()
+            )
+            await interaction.response.send_message(embed=embed, ephemeral=True)
 
     def create_config_embed(self, guild, settings):
         """設定用Embedを生成する共通メソッド"""
