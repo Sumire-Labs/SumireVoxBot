@@ -12,6 +12,9 @@ from dotenv import load_dotenv
 from src.utils.views import ConfigSearchView
 
 
+AUTO_LEAVE_INTERVAL: int = 1
+
+
 def is_katakana(text: str) -> bool:
     """全角カタカナ、長音記号のみで構成されているか判定"""
     return re.fullmatch(r'^[ァ-ヶーヴ]+$', text) is not None
@@ -308,7 +311,7 @@ class Voice(commands.Cog):
         if before.channel.id != target_channel.id:
             return
 
-        await asyncio.sleep(3)
+        await asyncio.sleep(AUTO_LEAVE_INTERVAL)
 
         # Bot以外のメンバー（Bot: False）のリストを取得
         non_bot_members = [m for m in target_channel.members if not m.bot]
