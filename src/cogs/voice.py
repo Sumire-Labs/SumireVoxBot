@@ -11,7 +11,6 @@ import romkan2
 from dotenv import load_dotenv
 from src.utils.views import ConfigSearchView
 
-
 AUTO_LEAVE_INTERVAL: int = 1
 
 
@@ -82,40 +81,89 @@ class Voice(commands.Cog):
 
     async def _process_and_play(self, guild, text, author_id):
         """1つのテキストを処理して再生する内部メソッド"""
-        # DBからユーザー設定を読み込む
-        s = await self.bot.db.get_user_setting(author_id)
         file_path = f"{self.temp_dir}/audio_{guild.id}.wav"
 
-        # 正規化処理
-        normalized_text = jaconv.h2z(text, kana=True, digit=True, ascii=True).lower()
-        logger.debug(f"[{guild.id}] 音声生成開始: {normalized_text[:20]}...")
+        try:
+            # DBからユーザー設定を読み込む
+            try:
+                s = await self.bot.db.get_user_setting(author_id)
+            except Exception as e:
+                logger.error(f"[{guild.id}] ユーザー設定の取得に失敗しました (user_id: {author_id}): {e}")
+                # デフォルト設定を使用
+                s = {"speaker": 1, "speed": 1.0, "pitch": 0.0}
 
-        # 音声生成
-        await self.bot.vv_client.generate_sound(
-            text=normalized_text,
-            speaker_id=s["speaker"],
-            speed=s["speed"],
-            pitch=s["pitch"],
-            output_path=file_path
-        )
+            # 正規化処理
+            try:
+                normalized_text = jaconv.h2z(text, kana=True, digit=True, ascii=True).lower()
+                logger.debug(f"[{guild.id}] 音声生成開始: {normalized_text[:20]}...")
+            except Exception as e:
+                logger.error(f"[{guild.id}] テキストの正規化に失敗しました: {e}")
+                return
 
-        # ボイスチャットに接続していない場合はスキップ
-        if not guild.voice_client:
-            return
+            # 音声生成
+            try:
+                await self.bot.vv_client.generate_sound(
+                    text=normalized_text,
+                    speaker_id=s["speaker"],
+                    speed=s["speed"],
+                    pitch=s["pitch"],
+                    output_path=file_path
+                )
+            except Exception as e:
+                logger.error(f"[{guild.id}] 音声生成に失敗しました: {e}")
+                return
 
-        # 再生処理
-        source = discord.FFmpegPCMAudio(
-            file_path,
-            options="-vn -loglevel quiet",
-            before_options="-loglevel quiet",
-        )
-        stop_event = asyncio.Event()
-        guild.voice_client.play(
-            source,
-            after=lambda e: self.bot.loop.call_soon_threadsafe(stop_event.set)
-        )
-        await stop_event.wait()
-        logger.info(f"[{guild.id}] 再生完了: {normalized_text[:15]}")
+            # ファイルが正常に生成されたか確認
+            if not os.path.exists(file_path):
+                logger.error(f"[{guild.id}] 音声ファイルが生成されませんでした: {file_path}")
+                return
+
+            # ボイスチャットに接続していない場合はスキップ
+            if not guild.voice_client:
+                logger.warning(f"[{guild.id}] VC未接続のため再生をスキップしました")
+                return
+
+            # 再生処理
+            try:
+                source = discord.FFmpegPCMAudio(
+                    file_path,
+                    options="-vn -loglevel quiet",
+                    before_options="-loglevel quiet",
+                )
+                stop_event = asyncio.Event()
+
+                def after_callback(error):
+                    if error:
+                        logger.error(f"[{guild.id}] 再生中にエラーが発生しました: {error}")
+                    self.bot.loop.call_soon_threadsafe(stop_event.set)
+
+                guild.voice_client.play(source, after=after_callback)
+
+                # タイムアウト付きで待機（30秒）
+                try:
+                    await asyncio.wait_for(stop_event.wait(), timeout=30.0)
+                    logger.info(f"[{guild.id}] 再生完了: {normalized_text[:15]}")
+                except asyncio.TimeoutError:
+                    logger.warning(f"[{guild.id}] 再生がタイムアウトしました")
+                    if guild.voice_client and guild.voice_client.is_playing():
+                        guild.voice_client.stop()
+
+            except discord.errors.ClientException as e:
+                logger.error(f"[{guild.id}] Discord再生エラー (ClientException): {e}")
+            except Exception as e:
+                logger.error(f"[{guild.id}] 再生処理中に予期しないエラーが発生しました: {e}")
+
+        except Exception as e:
+            logger.error(f"[{guild.id}] _process_and_play内で予期しないエラーが発生しました: {e}")
+        finally:
+            # 一時ファイルのクリーンアップ
+            try:
+                if os.path.exists(file_path):
+                    await asyncio.sleep(0.5)  # ファイルハンドルが確実に閉じられるまで待機
+                    os.remove(file_path)
+                    logger.debug(f"[{guild.id}] 一時ファイルを削除しました: {file_path}")
+            except Exception as e:
+                logger.warning(f"[{guild.id}] 一時ファイルの削除に失敗しました: {e}")
 
     @commands.Cog.listener(name="on_voice_state_update")
     async def on_vc_notification(self, member: discord.Member, before: discord.VoiceState, after: discord.VoiceState):
@@ -739,7 +787,8 @@ class Voice(commands.Cog):
         embed.add_field(name="入退出通知", value="✅ 有効" if settings.read_vc_status else "❌ 無効", inline=True)
 
         embed.add_field(name="絵文字の読み上げ", value="✅ 有効" if settings.read_emoji else "❌ 無効", inline=True)
-        embed.add_field(name="コードブロックの省略", value="✅ 有効" if settings.skip_code_blocks else "❌ 無効", inline=True)
+        embed.add_field(name="コードブロックの省略", value="✅ 有効" if settings.skip_code_blocks else "❌ 無効",
+                        inline=True)
         embed.add_field(name="URLの省略", value="✅ 有効" if settings.skip_urls else "❌ 無効", inline=True)
 
         # 自動接続設定
