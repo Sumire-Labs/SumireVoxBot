@@ -18,6 +18,8 @@ from src.web.web import app as web_app
 # ロガーのセットアップ
 logger = setup_logger()
 
+load_dotenv()
+
 # インテントの設定
 intents = discord.Intents.default()
 intents.members = True
@@ -74,10 +76,17 @@ class SumireVox(commands.Bot):
             except Exception as e:
                 logger.error(f"{cog} の読み込みに失敗しました: {e}")
 
-        config = uvicorn.Config(web_app, host="0.0.0.0", port=WEB_PORT)
-        server = uvicorn.Server(config)
-        self.web_task = asyncio.create_task(server.serve())
-        logger.success(f"Web管理画面をポート {WEB_PORT} で起動しました")
+        try:
+            config = uvicorn.Config(web_app, host="0.0.0.0", port=WEB_PORT, log_level="error", loop="asyncio")
+            server = uvicorn.Server(config)
+            self.web_task = asyncio.create_task(server.serve())
+            logger.success(f"Web管理画面をポート {WEB_PORT} で起動しました")
+        except OSError as e:
+            logger.error(f"Web管理画面の起動に失敗しました (ポート {WEB_PORT} が使用中の可能性があります): {e}")
+            raise
+        except Exception as e:
+            logger.error(f"Web管理画面の起動中に予期しないエラーが発生しました: {e}")
+            raise
 
     async def close(self) -> None:
         logger.warning("シャットダウンシーケンスを開始します...")

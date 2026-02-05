@@ -1,3 +1,4 @@
+from dotenv import load_dotenv
 from fastapi import FastAPI, Request, Form
 from fastapi.responses import HTMLResponse, RedirectResponse
 from fastapi.templating import Jinja2Templates
@@ -74,5 +75,6 @@ async def delete_word(word: str = Form(...)):
 
 if __name__ == "__main__":
     import uvicorn
-
-    uvicorn.run(app, host="0.0.0.0", port=8080)
+    load_dotenv()
+    WEB_PORT = int(os.getenv("WEB_PORT", 8080))
+    uvicorn.run(app, host="0.0.0.0", port=WEB_PORT)

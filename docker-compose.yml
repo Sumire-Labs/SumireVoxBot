@@ -17,6 +17,7 @@ services:
       - sumire_vox_network
     ports:
       - "8080:8080"
+      - "5050:5050"
   voicevox_engine:
     image: voicevox/voicevox_engine:cpu-ubuntu20.04-latest
     container_name: voicevox_engine
