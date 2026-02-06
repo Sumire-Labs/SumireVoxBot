@@ -11,6 +11,9 @@ ENV/
 
 # Environment Variables
 .env
+.env.bot1
+.env.bot2
+.env.bot3
 
 # JetBrains IDEs
 .idea/
