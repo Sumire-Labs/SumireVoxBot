@@ -4,7 +4,6 @@ from discord.ext import commands
 import os
 from dotenv import load_dotenv
 import signal
-import uvicorn
 
 # ロガー関連のインポート
 from src.utils.logger import setup_logger, console
