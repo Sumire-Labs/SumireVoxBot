@@ -1,82 +1,89 @@
-# SumireVox 🌸
+# SumireVoxBot 🌸
 
-SumireVoxは、DiscordのテキストメッセージをVOICEVOXを使用して読み上げる、高性能なDiscord読み上げBotです。
-PostgreSQLを使用した柔軟な設定保存や、Dockerによる簡単なデプロイが可能です。
+SumireVoxBotは、VOICEVOXを使用したDiscord読み上げBotです。
+Dockerを使用して簡単にセットアップでき、複数のBotインスタンスを同時に実行することも可能です。
 
 ## ✨ 主な機能
 
-- **メッセージ読み上げ**: 指定したチャンネルのメッセージをVCで読み上げます。
-- **VOICEVOX連携**: 多様なキャラクターボイスで読み上げが可能です。
-- **高度なカスタマイズ**:
-  - キャラクター（話者）、速度、ピッチの個別設定。
-  - ユーザーごとの音声設定。
-- **辞書機能**: 
-  - サーバーごとの単語登録。
-  - グローバル辞書（特定IDのサーバー）との同期機能。
-- **自動機能**: 
-  - VCへのユーザー入室に合わせた自動参加・自動退出。
-  - VC通知機能。
-- **直感的なUI**: Discordのスラッシュコマンドとインタラクティブなボタン/メニューによる操作。
+- **読み上げ機能**: ボイスチャンネル内のテキストをVOICEVOXの豊富な音声で読み上げます。
+- **マルチデバイス対応**: 複数のBotを個別の設定で動作させることが可能です。
+- **ユーザー設定**: 各ユーザーがお好みの話者、速度、ピッチをカスタマイズできます。
+- **辞書機能**: サーバーごとに読み上げ辞書を登録・管理できます。
+- **自動入退出**: ユーザーの接続に合わせて自動的にボイスチャンネルに参加・退出する設定が可能です。
 
-## 🛠 技術スタック
+## 🚀 セットアップ手順
 
-- **言語**: Python 3.12+
-- **ライブラリ**: discord.py, loguru, aiohttp, SQLAlchemy
-- **音声合成**: VOICEVOX Engine
-- **データベース**: PostgreSQL 15
-- **インフラ**: Docker / Docker Compose
+### 前提条件
+- [Docker](https://www.docker.com/) および [Git](https://git-scm.com/) がインストールされていること。
+- Discord Botのトークンを取得済みであること（[Discord Developer Portal](https://discord.com/developers/applications)）。
 
-## 🚀 セットアップ
+### 簡単セットアップ (推奨)
 
-### 1. リポジトリのクローン
+Windowsの場合は PowerShell スクリプト、Linux/macOSの場合は Shell スクリプトを使用して、対話形式でセットアップできます。
 
-```bash
-git clone https://github.com/your-username/SumireVox.git
-cd SumireVox
+#### Windows (PowerShell)
+```powershell
+./setup.ps1
 ```
 
-### 2. 環境設定
-
-`.env.template` を `.env` にコピーし、必要な情報を記入してください。
-
+#### Linux / macOS
 ```bash
-cp .env.template .env.bot1
+chmod +x setup.sh
+./setup.sh
 ```
 
-**主な設定項目:**
-- `DISCORD_TOKEN`: Discord Botのトークン
-- `VOICEVOX_HOST`: VOICEVOX Engineのホスト名（Docker使用時は `voicevox_engine`）
-- `GLOBAL_DICT_ID`: グローバル辞書として使用するギルドID
+これらのスクリプトは以下の処理を自動で行います：
+1. `docker-compose.yml` の生成
+2. `.env` ファイルの作成（トークンの入力が必要）
+3. 必要なディレクトリの作成
+4. Dockerコンテナの起動
 
-### 3. 起動（Docker Composeを使用する場合）
+### 手動セットアップ
 
-```bash
-docker-compose up -d
-```
+1. リポジトリをクローンします。
+2. `.env.template` を `.env` にコピーし、`DISCORD_TOKEN` を設定します。
+3. `docker-compose up -d` を実行します。
 
-これにより、Bot、PostgreSQL、VOICEVOX Engineのすべてが自動的に起動します。
+## 🎮 使用方法
 
-## 🎮 コマンド一覧
+コマンドのプレフィックスは `/` (スラッシュコマンド) です。
 
-| コマンド | 説明 |
-| :--- | :--- |
-| `/join` | Botをボイスチャンネルに参加させます。 |
-| `/leave` | Botをボイスチャンネルから退出させます。 |
-| `/set_voice` | 音声（話者、速度、ピッチ）を設定します。 |
-| `/add_word` | 辞書に単語を登録します。 |
-| `/remove_word` | 辞書から単語を削除します。 |
-| `/dictionary` | 辞書一覧を表示・管理します。 |
-| `/config` | 現在の設定を確認します。 |
-| `/ping` | Botの応答速度を確認します。 |
+### 音声関連コマンド
+- `/join`: 実行者が参加しているボイスチャンネルに参加します。
+- `/leave`: ボイスチャンネルから退出します。
+- `/set_voice`: 自分の使用する話者、速度、ピッチを設定します。
+- `/config`: 現在のサーバー設定やユーザー設定を確認します。
 
-## 📁 プロジェクト構造
+### 辞書関連コマンド
+- `/add_word`: 新しい単語とその読みを辞書に追加します。
+- `/remove_word`: 辞書から単語を削除します。
+- `/dictionary`: 現在登録されている辞書一覧を表示します。
 
-- `src/cogs`: Botの機能モジュール（読み上げ、コマンド等）
-- `src/core`: データベース接続、VOICEVOXクライアント等のコアロジック
-- `src/queries`: データベース操作用クエリ
-- `src/utils`: ロガーやユーティリティツール
-- `assets`: 画像やアセットファイル
+### その他
+- `/ping`: Botの応答速度を確認します。
 
-## ⚖️ ライセンス
+## ⚙️ 環境変数
 
-[LICENSE](LICENSE) ファイルを参照してください。
+`.env` ファイルで以下の設定が可能です。
+
+| 変数名 | 説明 | デフォルト値 |
+| :--- | :--- | :--- |
+| `DISCORD_TOKEN` | Discord Botのトークン | (必須) |
+| `COMMANDS_SYNC` | 起動時にコマンドを同期するか | `true` |
+| `VOICEVOX_HOST` | VOICEVOXエンジンのホスト名 | `voicevox_engine` (Docker内) |
+| `VOICEVOX_PORT` | VOICEVOXエンジンのポート番号 | `50021` |
+| `POSTGRES_USER` | データベースのユーザー名 | `user` |
+| `POSTGRES_PASSWORD` | データベースのパスワード | `password` |
+| `POSTGRES_DB` | データベース名 | `sumire_vox` |
+
+## 🛠️ 開発者向け
+
+### コマンドの同期
+開発者（Botのオーナー）は `/sync` コマンドを使用して、Cogのリロードとコマンドのグローバル同期を実行できます。
+
+## 📄 ライセンス
+
+このプロジェクトは [LICENSE](LICENSE) ファイルに記載されているライセンスの下で公開されています。
+
+---
+Powered by [VOICEVOX](https://voicevox.hiroshiba.jp/)
