@@ -77,17 +77,6 @@ class SumireVox(commands.Bot):
             except Exception as e:
                 logger.error(f"{cog} の読み込みに失敗しました: {e}")
 
-        if COMMANDS_SYNC == "true":
-            try:
-                logger.info(f"コマンドを同期しています...")
-                synced = await self.tree.sync()
-                logger.success(f"{len(synced)}個のコマンドを同期しました")
-            except Exception as e:
-                logger.error(f"コマンドの同期に失敗しました: {e}")
-                raise
-        else:
-            logger.warning("コマンドの同期は無効化されています")
-
         if DEV_GUILD_ID != 0:
             try:
                 logger.info(f"開発サーバー (ID: {DEV_GUILD_ID}) にコマンドを同期しています...")
@@ -97,6 +86,13 @@ class SumireVox(commands.Bot):
                 logger.success(f"{len(synced)}個のコマンドを開発サーバー (ID: {DEV_GUILD_ID}) に同期しました")
             except Exception as e:
                 logger.error(f"開発サーバー (ID: {DEV_GUILD_ID}) のコマンド同期に失敗しました: {e}")
+        else:
+            try:
+                logger.info(f"開発サーバーが指定されていないため、コマンドのグローバル同期を行います...")
+                synced = await self.tree.sync(guild=None)
+                logger.success(f"{len(synced)}個のコマンドを同期しました")
+            except Exception as e:
+                logger.error(f"コマンドのグローバル同期に失敗しました: {e}")
 
     async def close(self) -> None:
         logger.warning("シャットダウンシーケンスを開始します...")
