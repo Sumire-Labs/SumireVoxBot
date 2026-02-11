@@ -83,7 +83,7 @@ chmod +x setup.sh
 
 ## 📄 ライセンス
 
-このプロジェクトは [LICENSE](LICENSE.md) ファイルに記載されているライセンスの下で公開されています。
+このプロジェクトは [LICENSE](/LICENSE.md) ファイルに記載されているライセンスの下で公開されています。
 
 ---
 Powered by [VOICEVOX](https://voicevox.hiroshiba.jp/)
