@@ -309,6 +309,11 @@ class Voice(commands.Cog):
         settings = await self.bot.db.get_guild_settings(message.guild.id)
         content = message.clean_content
 
+        # Discordのタイムスタンプ表現 <t:UNIX:FORMAT> を読み上げ用に変換
+        # 例:
+        #   <t:1700000000:R> -> 「3分前」
+        #   <t:1700000000:F> -> 「2026年2月11日23時23分」
+        #   <t:1700000000:S> -> 「2026年2月11日23時23分33秒」（非標準/環境依存のため独自対応）
         def _format_discord_timestamp_for_tts(match: re.Match) -> str:
             try:
                 unix = int(match.group("unix"))
@@ -317,7 +322,6 @@ class Voice(commands.Cog):
 
             fmt = match.group("fmt") or "f"
 
-            # Python標準のみで完結（外部依存なし）
             from datetime import datetime, timezone
 
             dt = datetime.fromtimestamp(unix, tz=timezone.utc)
@@ -328,7 +332,6 @@ class Voice(commands.Cog):
                 future = delta_sec > 0
                 sec = abs(delta_sec)
 
-                # 粒度をざっくり（TTS向けに自然さ優先）
                 if sec < 60:
                     n, unit = sec, "秒"
                 elif sec < 3600:
@@ -347,32 +350,57 @@ class Voice(commands.Cog):
 
                 return f"{n}{unit}{'後' if future else '前'}"
 
-            # :R は相対表現、それ以外は日時として読む
             if fmt == "R":
                 return _relative_jp(dt, now)
 
-            # ローカル時刻で読み上げ（一般的に自然）
+            # ローカル時刻で読み上げ（自然なため）
             local_dt = dt.astimezone()
 
             if fmt == "t":  # 16:20
                 return f"{local_dt.hour}時{local_dt.minute}分"
             if fmt == "T":  # 16:20:30
                 return f"{local_dt.hour}時{local_dt.minute}分{local_dt.second}秒"
-            if fmt == "d":  # 20/04/2021
+            if fmt == "d":  # 日付のみ
                 return f"{local_dt.year}年{local_dt.month}月{local_dt.day}日"
-            if fmt == "D":  # April 20, 2021
+            if fmt == "D":  # 日付のみ（表記違いだが読み上げは同じに寄せる）
                 return f"{local_dt.year}年{local_dt.month}月{local_dt.day}日"
-            if fmt == "f":  # April 20, 2021 16:20
+            if fmt == "f":  # 日付+時分
                 return f"{local_dt.year}年{local_dt.month}月{local_dt.day}日{local_dt.hour}時{local_dt.minute}分"
-            if fmt == "F":  # Tuesday, April 20, 2021 16:20
+            if fmt == "F":  # 日付+時分（曜日は省略して読み上げを簡潔に）
                 return f"{local_dt.year}年{local_dt.month}月{local_dt.day}日{local_dt.hour}時{local_dt.minute}分"
+
+            # 独自: :S を「日付+時分秒」として読む（ユーザー要望対応）
+            if fmt == "S":
+                return (
+                    f"{local_dt.year}年{local_dt.month}月{local_dt.day}日"
+                    f"{local_dt.hour}時{local_dt.minute}分{local_dt.second}秒"
+                )
 
             # 不明フォーマットはデフォルト扱い
             return f"{local_dt.year}年{local_dt.month}月{local_dt.day}日{local_dt.hour}時{local_dt.minute}分"
 
+        # <t:1234567890:R> / <t:1234567890> どちらも対応
+        # :S も含め、1文字フォーマットは幅広く拾う（tTdDfFR + S）
         content = re.sub(
-            r"<t:(?P<unix>\d+)(?::(?P<fmt>[tTdDfFR]))?>",
+            r"<t:(?P<unix>\d+)(?::(?P<fmt>[A-Za-z]))?>",
             _format_discord_timestamp_for_tts,
+            content
+        )
+
+        # Discordクライアント側で既に「2026/02/11 23:23:33」のような文字列に展開される環境向け
+        # それ自体を日本語の読み上げに変換する（スラッシュ/コロン読み上げ事故対策）
+        def _format_rendered_datetime_for_tts(match: re.Match) -> str:
+            y = int(match.group("y"))
+            mo = int(match.group("mo"))
+            d = int(match.group("d"))
+            hh = int(match.group("hh"))
+            mm = int(match.group("mm"))
+            ss = int(match.group("ss"))
+            return f"{y}年{mo}月{d}日{hh}時{mm}分{ss}秒"
+
+        content = re.sub(
+            r"(?P<y>\d{4})/(?P<mo>\d{2})/(?P<d>\d{2})[ ](?P<hh>\d{2}):(?P<mm>\d{2}):(?P<ss>\d{2})",
+            _format_rendered_datetime_for_tts,
             content
         )
 
