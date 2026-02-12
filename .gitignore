@@ -3,44 +3,29 @@ __pycache__/
 *.py[cod]
 *$py.class
 *.so
-.Python
-env/
+
+# Virtual Environment
+.venv/
 venv/
 ENV/
-build/
-develop-eggs/
-dist/
-downloads/
-eggs/
-.eggs/
-lib/
-lib64/
-parts/
-sdist/
-var/
-wheels/
-*.egg-info/
-.installed.cfg
-*.egg
 
-# Environment variables
+# Environment Variables
 .env
-.env.common
+.env.bot1
+.env.bot2
+.env.bot3
 
-# IDE
+# JetBrains IDEs
 .idea/
 
-# Logs
+# Project-specific
 logs/
-
-# Temporary files
 temp/
-
-# PostgreSQL data
 postgres_data/
 
-# VOICEVOX configuration
-voicevox_config/
+# OS
+.DS_Store
+Thumbs.db
 
 # Docker
 docker-compose.yml
