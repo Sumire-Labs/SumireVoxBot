@@ -11,6 +11,7 @@ ENV/
 
 # Environment Variables
 .env
+.env.common
 .env.bot1
 .env.bot2
 .env.bot3
