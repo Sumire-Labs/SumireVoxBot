@@ -7,10 +7,10 @@ x-bot-template: &bot-template
   volumes:
     - ./app/bot:/app
   depends_on:
-    - db
-    - voicevox_engine
-  networks:
-    - sumire_vox_network
+    db:
+      condition: service_healthy
+    voicevox_engine:
+      condition: service_healthy
   restart: unless-stopped
 
 services:
