@@ -3,14 +3,14 @@ version: "3.8"
 # 共通設定の定義
 x-bot-template: &bot-template
   build:
-    context: ./app/bot
+    context: .
   volumes:
     - ./app/bot:/app
   depends_on:
     db:
       condition: service_healthy
     voicevox_engine:
-      condition: service_healthy
+      condition: service_started
   restart: unless-stopped
 
 services:
@@ -18,7 +18,7 @@ services:
     <<: *bot-template
     container_name: sumire_vox_bot_1
     env_file:
-      - ./app/bot/.env.bot1
+      - ./.env.bot1
     ports:
       - "8080:8080"
 
@@ -29,7 +29,7 @@ services:
       - "50021:50021"
     restart: unless-stopped
     volumes:
-      - ./app/bot/voicevox_config:/root/.local/share/voicevox_engine
+      - ./voicevox_config:/root/.local/share/voicevox_engine
     networks:
       - sumire_vox_network
 
@@ -42,7 +42,12 @@ services:
     ports:
       - "5432:5432"
     volumes:
-      - ./app/bot/postgres_data:/var/lib/postgresql/data
+      - ./postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: [ "CMD-SHELL", "pg_isready -U $$POSTGRES_USER -d $$POSTGRES_DB" ]
+      interval: 5s
+      timeout: 5s
+      retries: 30
     networks:
       - sumire_vox_network
 
