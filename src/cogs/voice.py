@@ -412,6 +412,7 @@ class Voice(commands.Cog):
         # コードブロックを省略
         if settings.skip_code_blocks:
             content = re.sub(r"```.*?```", "、コードブロック省略、", content, flags=re.DOTALL)
+            content = re.sub(r"`.*?`", "、コード省略、", content, flags=re.DOTALL)
 
         # URLを省略
         if settings.skip_urls:
