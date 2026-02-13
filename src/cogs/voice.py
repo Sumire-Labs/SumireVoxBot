@@ -850,8 +850,7 @@ class Voice(commands.Cog):
 
     def create_dictionary_embed(self, guild_rows):
         """辞書表示用Embedを生成する"""
-        embed = discord.Embed(title="📖 辞書管理", color=discord.Color.blue())
-        embed.add_field(name="🏠 サーバー辞書", value=format_rows(guild_rows), inline=False)
+        embed = discord.Embed(title="📖 辞書管理", color=discord.Color.blue(), description=format_rows(guild_rows))
         embed.set_footer(text="下のボタンから単語を追加・削除できます")
         return embed
 
