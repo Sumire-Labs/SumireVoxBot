@@ -135,8 +135,9 @@ class Database:
     @alru_cache(maxsize=128, ttl=10)
     async def get_guild_boost_count(self, guild_id: int) -> int:
         """ギルドの合計ブースト数を取得（キャッシュ付き）"""
-        count = await self.pool.fetchval(BillingQueries.GET_GUILD_BOOST_COUNT, int(guild_id))
-        logger.debug(f"[DB DEBUG] get_guild_boost_count(guild_id={guild_id}, type={type(guild_id)}) -> count={count}")
+        guild_id_int = int(guild_id)
+        count = await self.pool.fetchval(BillingQueries.GET_GUILD_BOOST_COUNT, guild_id_int)
+        logger.debug(f"[DB DEBUG] get_guild_boost_count(guild_id={guild_id_int}, type={type(guild_id_int)}) -> count={count}")
         return count
 
     async def is_guild_boosted(self, guild_id: int) -> bool:
@@ -145,14 +146,24 @@ class Database:
 
     async def is_instance_active(self, guild_id: int) -> bool:
         """現在のインスタンスがこのサーバーでアクティブになるべきか判定"""
+        # デバッグ用フラグ
+        if os.getenv("SKIP_PREMIUM_CHECK", "false").lower() == "true":
+            logger.debug(f"[DEBUG] SKIP_PREMIUM_CHECK is True. Instance is active for guild {guild_id}")
+            return True
+
         min_level = int(os.getenv("MIN_BOOST_LEVEL", "0"))
         if min_level == 0:
+            logger.debug(f"[DEBUG] MIN_BOOST_LEVEL is 0. Main instance is always active.")
             return True
         
-        boost_count = await self.bot.db.get_guild_boost_count(int(guild_id))
+        guild_id_int = int(guild_id)
+        boost_count = await self.get_guild_boost_count(guild_id_int)
+        
         # 修正: LEVEL 1 (2台目) は 2ブースト以上でアクティブ
         # つまり boost_count >= (min_level + 1)
-        return boost_count >= (min_level + 1)
+        is_active = boost_count >= (min_level + 1)
+        logger.debug(f"[DEBUG] is_instance_active(guild={guild_id_int}, level={min_level}): count={boost_count} -> active={is_active}")
+        return is_active
 
     async def get_guild_booster(self, guild_id: int) -> str | None:
         """ギルドをブーストしているユーザーのIDを取得"""

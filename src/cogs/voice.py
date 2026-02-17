@@ -154,6 +154,7 @@ class Voice(commands.Cog):
 
     async def enqueue_message(self, guild_id: int, text: str, author_id: int):
         """メッセージをキューに追加し、音声生成を開始する"""
+        logger.debug(f"[DEBUG] enqueue_message(guild_id={guild_id}, author_id={author_id}) text='{text[:50]}'")
         task_id = str(uuid.uuid4())
         file_path = f"{self.temp_dir}/audio_{guild_id}_{task_id}.wav"
 
@@ -183,6 +184,8 @@ class Voice(commands.Cog):
         self.is_processing[guild_id] = True
         queue = self.get_queue(guild_id)
         guild = self.bot.get_guild(guild_id) or await self.bot.fetch_guild(guild_id)
+        vc = guild.voice_client
+        logger.debug(f"[DEBUG] play_next start guild={guild_id}, vc_connected={bool(vc and vc.is_connected())}, queue_size={queue.qsize()}")
 
         try:
             while not queue.empty():
@@ -213,55 +216,61 @@ class Voice(commands.Cog):
         if audio_task.is_failed:
             logger.warning(f"[{guild_id}] 音声生成が失敗したためスキップ ({audio_task.task_id})")
             return
+        
+        # 生成ファイルの存在確認
+        if not os.path.exists(audio_task.file_path):
+            logger.error(f"[{guild_id}] 生成ファイルが見つかりません: {audio_task.file_path}")
+            return
 
         # ボイスチャットに接続していない場合はスキップ
         if not guild.voice_client:
             logger.warning(f"[{guild_id}] VC未接続のため再生をスキップしました ({audio_task.task_id})")
             return
 
-            # 再生処理
+        # 再生処理
+        try:
+            if not guild.voice_client or not guild.voice_client.is_connected():
+                logger.error(f"[{guild_id}] VC切断を検知したため、再接続を試みます...")
+                # 自動接続設定があれば再接続を試みるロジック（簡易版）
+                return
+
+            logger.debug(f"[DEBUG] 再生開始: file={audio_task.file_path}, vc_connected={guild.voice_client.is_connected()}")
+            source = discord.FFmpegPCMAudio(
+                audio_task.file_path,
+                options="-vn -loglevel quiet",
+                before_options="-loglevel quiet",
+            )
+            stop_event = asyncio.Event()
+
+            def after_callback(error):
+                if error:
+                    logger.error(f"[{guild_id}] 再生中にエラーが発生しました (callback): {error}")
+                if self.bot.loop.is_running():
+                    self.bot.loop.call_soon_threadsafe(stop_event.set)
+
+            guild.voice_client.play(source, after=after_callback)
+
+            # タイムアウト付きで待機（30秒）
             try:
-                if not guild.voice_client or not guild.voice_client.is_connected():
-                    logger.error(f"[{guild_id}] VC切断を検知したため、再接続を試みます...")
-                    # 自動接続設定があれば再接続を試みるロジック（簡易版）
-                    return
-
-                source = discord.FFmpegPCMAudio(
-                    audio_task.file_path,
-                    options="-vn -loglevel quiet",
-                    before_options="-loglevel quiet",
-                )
-                stop_event = asyncio.Event()
-
-                def after_callback(error):
-                    if error:
-                        logger.error(f"[{guild_id}] 再生中にエラーが発生しました (callback): {error}")
-                    if self.bot.loop.is_running():
-                        self.bot.loop.call_soon_threadsafe(stop_event.set)
-
-                guild.voice_client.play(source, after=after_callback)
-
-                # タイムアウト付きで待機（30秒）
-                try:
-                    await asyncio.wait_for(stop_event.wait(), timeout=35.0)
-                    logger.info(f"[{guild_id}] 再生完了 ({audio_task.task_id}): {audio_task.text[:15]}")
-                except asyncio.TimeoutError:
-                    logger.warning(f"[{guild_id}] 再生がタイムアウトしました ({audio_task.task_id})")
-                    if guild.voice_client and guild.voice_client.is_playing():
-                        guild.voice_client.stop()
-                except Exception as e:
-                    logger.error(f"[{guild_id}] 再生待機中に予期しないエラーが発生しました: {e}")
-
-            except discord.errors.ClientException as e:
-                logger.error(f"[{guild_id}] Discord再生エラー (ClientException): {e}")
-                # VoiceClientの状態が異常な場合、リセットを検討
-                if guild.voice_client and not guild.voice_client.is_playing():
-                    try:
-                        await guild.voice_client.disconnect(force=True)
-                    except:
-                        pass
+                await asyncio.wait_for(stop_event.wait(), timeout=35.0)
+                logger.info(f"[{guild_id}] 再生完了 ({audio_task.task_id}): {audio_task.text[:15]}")
+            except asyncio.TimeoutError:
+                logger.warning(f"[{guild_id}] 再生がタイムアウトしました ({audio_task.task_id})")
+                if guild.voice_client and guild.voice_client.is_playing():
+                    guild.voice_client.stop()
             except Exception as e:
-                logger.error(f"[{guild_id}] 再生処理中に予期しないエラーが発生しました: {e}")
+                logger.error(f"[{guild_id}] 再生待機中に予期しないエラーが発生しました: {e}")
+
+        except discord.errors.ClientException as e:
+            logger.error(f"[{guild_id}] Discord再生エラー (ClientException): {e}")
+            # VoiceClientの状態が異常な場合、リセットを検討
+            if guild.voice_client and not guild.voice_client.is_playing():
+                try:
+                    await guild.voice_client.disconnect(force=True)
+                except:
+                    pass
+        except Exception as e:
+            logger.error(f"[{guild_id}] 再生処理中に予期しないエラーが発生しました: {e}")
 
     async def _cleanup_audio_file(self, audio_task: AudioTask, guild_id: int):
         """音声ファイルを削除する"""
@@ -313,15 +322,34 @@ class Voice(commands.Cog):
 
     @commands.Cog.listener(name="on_message")
     async def read_message(self, message: discord.Message):
-        if message.author.bot or not message.guild or not message.guild.voice_client:
+        if message.author.bot:
             return
+        
+        if not message.guild:
+            return
+            
+        if not message.guild.voice_client:
+            return
+
         if message.channel.id != self.read_channels.get(message.guild.id):
             return
+
+        logger.debug(f"[DEBUG] on_message received in {message.guild.name} from {message.author.display_name}: {message.content[:50]}")
+
+        # 「s」または「ｓ」一文字なら読み上げ中断
+        if message.content.strip() in ("s", "ｓ"):
+            if message.guild.voice_client.is_playing():
+                message.guild.voice_client.stop()
+                logger.info(f"[{message.guild.id}] ユーザーにより再生が中断されました: {message.author.display_name}")
+                return
+
         if message.content.startswith(("!", "！")):
             return
 
         # インスタンスのアクティブ判定
-        if not await self.bot.db.is_instance_active(message.guild.id):
+        is_active = await self.bot.db.is_instance_active(message.guild.id)
+        if not is_active:
+            logger.debug(f"[DEBUG] Instance is NOT active for guild {message.guild.id}. Skipping message.")
             return
 
         settings = await self.bot.db.get_guild_settings(message.guild.id)
@@ -329,6 +357,8 @@ class Voice(commands.Cog):
         
         # ブーストされている場合は制限を緩和
         max_chars = settings.max_chars if not is_boosted else 500
+        
+        logger.debug(f"[DEBUG] Processing message. is_boosted={is_boosted}, max_chars={max_chars}")
         
         content = message.clean_content
 
