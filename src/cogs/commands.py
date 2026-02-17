@@ -5,9 +5,69 @@ from discord.ext import commands
 from loguru import logger
 
 
+class InviteView(discord.ui.View):
+    def __init__(self, bot_info_list: list[dict]):
+        super().__init__(timeout=None)
+        for info in bot_info_list:
+            url = f"https://discord.com/api/oauth2/authorize?client_id={info['id']}&permissions=3145728&scope=bot%20applications.commands"
+            self.add_item(discord.ui.Button(label=info['label'], url=url, emoji="🌸"))
+
+
 class Commands(commands.Cog):
     def __init__(self, bot):
         self.bot = bot
+
+    @app_commands.command(
+        name="invite",
+        description="追加のBotを招待します（ブースト済みサーバー限定）"
+    )
+    async def invite(self, interaction: discord.Interaction):
+        """招待リンクを表示する"""
+        boost_count = await self.bot.db.get_guild_boost_count(interaction.guild_id)
+        bot_instances = await self.bot.db.get_bot_instances()
+        
+        embed = discord.Embed(
+            title="🌸 Bot招待・管理",
+            description=f"現在のサーバーのブースト数: **{boost_count}**",
+            color=discord.Color.brand_green()
+        )
+
+        available_bots = []
+        next_goal = None
+
+        # インスタンスのリスト (bot_instances) は id (1, 2, 3...) でソートされている
+        # id=1 はメインBotなので、2台目以降は index > 0 (id > 1)
+        for i, bi in enumerate(bot_instances):
+            if i == 0: continue # メインBotはスキップ
+            
+            # 修正: 2台目(i=1)は2ブースト、3台目(i=2)は3ブースト...
+            # つまり boost_count >= i + 1
+            required_boosts = i + 1
+            if boost_count >= required_boosts:
+                available_bots.append({
+                    "id": bi["client_id"],
+                    "label": f"{i+1}台目を招待"
+                })
+            elif next_goal is None:
+                next_goal = required_boosts
+
+        if available_bots:
+            embed.add_field(
+                name="✅ 招待可能なBot",
+                value="以下のボタンからサブBotを招待できます。各Botは異なるチャンネルで同時に読み上げが可能です。",
+                inline=False
+            )
+            view = InviteView(available_bots)
+            await interaction.response.send_message(embed=embed, view=view)
+        else:
+            msg = "現在、招待可能なサブBotはありません。"
+            if next_goal:
+                msg += f"\nあと **{next_goal - boost_count}** ブーストで次のBotが解放されます！"
+            elif len(bot_instances) <= 1:
+                 msg += "\n現在、追加のサブBotは用意されていません。"
+            
+            embed.add_field(name="ℹ️ お知らせ", value=msg)
+            await interaction.response.send_message(embed=embed, ephemeral=True)
 
     @app_commands.command(
         name="ping",
