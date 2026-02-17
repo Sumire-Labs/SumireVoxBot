@@ -4,7 +4,8 @@ import asyncpg
 import os
 from loguru import logger
 from src.core.models import GuildSettings
-from src.queries import UserSettingsQueries, DictQueries, GuildSettingsQueries
+from src.queries import UserSettingsQueries, DictQueries, GuildSettingsQueries, BillingQueries
+from async_lru import alru_cache
 
 
 class Database:
@@ -32,6 +33,12 @@ class Database:
             await conn.execute(DictQueries.CREATE_TABLE)
             # サーバーごとの設定
             await conn.execute(GuildSettingsQueries.CREATE_TABLE)
+
+            # 課金関連
+            await conn.execute(BillingQueries.CREATE_USERS_TABLE)
+            await conn.execute(BillingQueries.CREATE_BOOSTS_TABLE)
+            await conn.execute(BillingQueries.CREATE_BOOSTS_GUILD_INDEX)
+            await conn.execute(BillingQueries.CREATE_BOOSTS_USER_INDEX)
 
     async def get_guild_settings(self, guild_id: int) -> GuildSettings:
         """サーバー設定を取得する。型が文字列でも辞書でも対応できるようにする"""
@@ -108,6 +115,110 @@ class Database:
             await conn.execute(DictQueries.INSERT_DICT, guild_id, dict_json)
         logger.debug(f"[{guild_id}] 辞書を更新しました。")
         return True
+
+    # 課金・ブースト関連
+    async def get_bot_instances(self) -> list[dict]:
+        """アクティブなBotインスタンス一覧をDBから取得"""
+        async with self.pool.acquire() as conn:
+            rows = await conn.fetch(
+                "SELECT id, client_id, bot_name, is_active FROM bot_instances WHERE is_active = true ORDER BY id ASC"
+            )
+            return [dict(r) for r in rows]
+
+    async def get_user_slots_status(self, user_id: int) -> dict:
+        """ユーザーのスロット数と使用済みスロット数を取得"""
+        row = await self.pool.fetchrow(BillingQueries.GET_USER_SLOTS_STATUS, str(user_id))
+        if row:
+            return {"total": row["total_slots"], "used": row["used_slots"]}
+        return {"total": 0, "used": 0}
+
+    @alru_cache(maxsize=128, ttl=10)
+    async def get_guild_boost_count(self, guild_id: int) -> int:
+        """ギルドの合計ブースト数を取得（キャッシュ付き）"""
+        count = await self.pool.fetchval(BillingQueries.GET_GUILD_BOOST_COUNT, int(guild_id))
+        logger.debug(f"[DB DEBUG] get_guild_boost_count(guild_id={guild_id}, type={type(guild_id)}) -> count={count}")
+        return count
+
+    async def is_guild_boosted(self, guild_id: int) -> bool:
+        """ギルドがブーストされているか確認（キャッシュ付き）"""
+        return await self.get_guild_boost_count(int(guild_id)) > 0
+
+    async def is_instance_active(self, guild_id: int) -> bool:
+        """現在のインスタンスがこのサーバーでアクティブになるべきか判定"""
+        min_level = int(os.getenv("MIN_BOOST_LEVEL", "0"))
+        if min_level == 0:
+            return True
+        
+        boost_count = await self.bot.db.get_guild_boost_count(int(guild_id))
+        # 修正: LEVEL 1 (2台目) は 2ブースト以上でアクティブ
+        # つまり boost_count >= (min_level + 1)
+        return boost_count >= (min_level + 1)
+
+    async def get_guild_booster(self, guild_id: int) -> str | None:
+        """ギルドをブーストしているユーザーのIDを取得"""
+        return await self.pool.fetchval(BillingQueries.GET_GUILD_BOOST_USER, int(guild_id))
+
+    async def activate_guild_boost(self, guild_id: int, user_id: int) -> bool:
+        """ギルドにブーストを適用する"""
+        # すでにブーストされているか確認
+        if await self.is_guild_boosted(int(guild_id)):
+            return False
+        
+        # スロットに空きがあるか確認
+        status = await self.get_user_slots_status(user_id)
+        if status["total"] <= status["used"]:
+            return False
+
+        async with self.pool.acquire() as conn:
+            await conn.execute(BillingQueries.INSERT_BOOST, int(guild_id), str(user_id))
+        
+        self.get_guild_boost_count.cache_clear()
+        self.is_guild_boosted.cache_clear()
+        logger.info(f"User {user_id} boosted guild {guild_id}")
+        return True
+
+    async def deactivate_guild_boost(self, guild_id: int, user_id: int) -> bool:
+        """ギルドのブーストを解除する。1つだけ削除するようにCTIDを使用"""
+        guild_id_int = int(guild_id)
+        user_id_str = str(user_id)
+        
+        async with self.pool.acquire() as conn:
+            async with conn.transaction():
+                # 1件分のCTIDを取得
+                row = await conn.fetchrow(
+                    "SELECT ctid FROM guild_boosts WHERE guild_id = $1::BIGINT AND user_id = $2 LIMIT 1 FOR UPDATE",
+                    guild_id_int,
+                    user_id_str
+                )
+                if not row:
+                    logger.info(f"Unboost attempt: No boost found for user {user_id_str} in guild {guild_id_int}")
+                    return False
+                
+                # CTIDで削除
+                status = await conn.execute(
+                    "DELETE FROM guild_boosts WHERE ctid = $1",
+                    row["ctid"]
+                )
+                
+                # asyncpgのexecuteは "DELETE 1" のような文字列を返す
+                success = status == "DELETE 1"
+                
+                if success:
+                    self.get_guild_boost_count.cache_clear()
+                    self.is_guild_boosted.cache_clear()
+                    logger.info(f"User {user_id_str} removed one boost from guild {guild_id_int} (Status: {status})")
+                else:
+                    logger.warning(f"Failed to delete boost row with ctid {row['ctid']} for user {user_id_str} (Status: {status})")
+                
+                return success
+
+    async def delete_guild_boosts_by_guild(self, guild_id: int):
+        """ギルドの全ブーストを削除（Bot退出時用）"""
+        async with self.pool.acquire() as conn:
+            await conn.execute("DELETE FROM guild_boosts WHERE guild_id = $1::BIGINT", int(guild_id))
+            self.get_guild_boost_count.cache_clear()
+            self.is_guild_boosted.cache_clear()
+            logger.info(f"Cleared all boosts for guild {guild_id} due to bot leave/kick")
 
     async def close(self):
         if self.pool:
