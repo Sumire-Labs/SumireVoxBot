@@ -219,35 +219,49 @@ class Voice(commands.Cog):
             logger.warning(f"[{guild_id}] VC未接続のため再生をスキップしました ({audio_task.task_id})")
             return
 
-        # 再生処理
-        try:
-            source = discord.FFmpegPCMAudio(
-                audio_task.file_path,
-                options="-vn -loglevel quiet",
-                before_options="-loglevel quiet",
-            )
-            stop_event = asyncio.Event()
-
-            def after_callback(error):
-                if error:
-                    logger.error(f"[{guild_id}] 再生中にエラーが発生しました: {error}")
-                self.bot.loop.call_soon_threadsafe(stop_event.set)
-
-            guild.voice_client.play(source, after=after_callback)
-
-            # タイムアウト付きで待機（30秒）
+            # 再生処理
             try:
-                await asyncio.wait_for(stop_event.wait(), timeout=30.0)
-                logger.info(f"[{guild_id}] 再生完了 ({audio_task.task_id}): {audio_task.text[:15]}")
-            except asyncio.TimeoutError:
-                logger.warning(f"[{guild_id}] 再生がタイムアウトしました ({audio_task.task_id})")
-                if guild.voice_client and guild.voice_client.is_playing():
-                    guild.voice_client.stop()
+                if not guild.voice_client or not guild.voice_client.is_connected():
+                    logger.error(f"[{guild_id}] VC切断を検知したため、再接続を試みます...")
+                    # 自動接続設定があれば再接続を試みるロジック（簡易版）
+                    return
 
-        except discord.errors.ClientException as e:
-            logger.error(f"[{guild_id}] Discord再生エラー (ClientException): {e}")
-        except Exception as e:
-            logger.error(f"[{guild_id}] 再生処理中に予期しないエラーが発生しました: {e}")
+                source = discord.FFmpegPCMAudio(
+                    audio_task.file_path,
+                    options="-vn -loglevel quiet",
+                    before_options="-loglevel quiet",
+                )
+                stop_event = asyncio.Event()
+
+                def after_callback(error):
+                    if error:
+                        logger.error(f"[{guild_id}] 再生中にエラーが発生しました (callback): {error}")
+                    if self.bot.loop.is_running():
+                        self.bot.loop.call_soon_threadsafe(stop_event.set)
+
+                guild.voice_client.play(source, after=after_callback)
+
+                # タイムアウト付きで待機（30秒）
+                try:
+                    await asyncio.wait_for(stop_event.wait(), timeout=35.0)
+                    logger.info(f"[{guild_id}] 再生完了 ({audio_task.task_id}): {audio_task.text[:15]}")
+                except asyncio.TimeoutError:
+                    logger.warning(f"[{guild_id}] 再生がタイムアウトしました ({audio_task.task_id})")
+                    if guild.voice_client and guild.voice_client.is_playing():
+                        guild.voice_client.stop()
+                except Exception as e:
+                    logger.error(f"[{guild_id}] 再生待機中に予期しないエラーが発生しました: {e}")
+
+            except discord.errors.ClientException as e:
+                logger.error(f"[{guild_id}] Discord再生エラー (ClientException): {e}")
+                # VoiceClientの状態が異常な場合、リセットを検討
+                if guild.voice_client and not guild.voice_client.is_playing():
+                    try:
+                        await guild.voice_client.disconnect(force=True)
+                    except:
+                        pass
+            except Exception as e:
+                logger.error(f"[{guild_id}] 再生処理中に予期しないエラーが発生しました: {e}")
 
     async def _cleanup_audio_file(self, audio_task: AudioTask, guild_id: int):
         """音声ファイルを削除する"""
@@ -306,7 +320,16 @@ class Voice(commands.Cog):
         if message.content.startswith(("!", "！")):
             return
 
+        # インスタンスのアクティブ判定
+        if not await self.bot.db.is_instance_active(message.guild.id):
+            return
+
         settings = await self.bot.db.get_guild_settings(message.guild.id)
+        is_boosted = await self.bot.db.is_guild_boosted(message.guild.id)
+        
+        # ブーストされている場合は制限を緩和
+        max_chars = settings.max_chars if not is_boosted else 500
+        
         content = message.clean_content
 
         # Discordのタイムスタンプ表現 <t:UNIX:FORMAT> を読み上げ用に変換
@@ -437,11 +460,8 @@ class Voice(commands.Cog):
             content = romkan2.to_hiragana(content)
 
         # 長文対策
-        limit: int = 50
-        if settings.max_chars:
-            limit = settings.max_chars
-        if len(content) > limit:
-            content = content[:limit] + "、以下略"
+        if len(content) > max_chars:
+            content = content[:max_chars] + "、以下略"
 
         # 添付ファイルのチェック
         if settings.read_attachments:
@@ -550,6 +570,27 @@ class Voice(commands.Cog):
         except Exception as e:
             logger.error(f"[{guild_id}] VC切断時のクリーンアップ中に予期しないエラーが発生しました: {e}")
 
+    @commands.Cog.listener()
+    async def on_guild_remove(self, guild: discord.Guild):
+        """Botがサーバーを脱退/蹴られた際にブースト情報をクリーンアップする"""
+        try:
+            await self.bot.db.delete_guild_boosts_by_guild(guild.id)
+            logger.info(f"[{guild.id}] サーバー脱退に伴いブースト情報を削除しました。")
+        except Exception as e:
+            logger.error(f"[{guild.id}] サーバー脱退時のブースト削除に失敗しました: {e}")
+
+    @commands.Cog.listener()
+    async def on_member_remove(self, member: discord.Member):
+        """ブーストしたユーザー自身がサーバーを抜けた際にブーストを解除する"""
+        try:
+            # そのサーバーのブースターが抜けたユーザーか確認
+            booster_id = await self.bot.db.get_guild_booster(member.guild.id)
+            if booster_id == str(member.id):
+                await self.bot.db.deactivate_guild_boost(member.guild.id, member.id)
+                logger.info(f"[{member.guild.id}] ブースター({member.id})が脱退したため、ブーストを解除しました。")
+        except Exception as e:
+            logger.error(f"[{member.guild.id}] メンバー脱退時のブーストチェックに失敗しました: {e}")
+
     @commands.Cog.listener(name="on_voice_state_update")
     async def auto_join(self, member: discord.Member, before: discord.VoiceState, after: discord.VoiceState):
         """設定に基づいてボイスチャンネルへ自動接続する"""
@@ -647,7 +688,9 @@ class Voice(commands.Cog):
             )
             return await interaction.response.send_message(embed=embed, ephemeral=True)
 
-        # 既にBotが接続している場合のチェック
+        channel = interaction.user.voice.channel
+
+        # 既に自分が接続しているか確認
         if interaction.guild.voice_client:
             embed = discord.Embed(
                 title="⚠️ 既に接続しています",
@@ -656,7 +699,19 @@ class Voice(commands.Cog):
             )
             return await interaction.response.send_message(embed=embed, ephemeral=True)
 
-        channel = interaction.user.voice.channel
+        # 重複チェック: 同じチャンネルに他のBot（SumireVoxシリーズ）がいないか
+        # 自分のBot名に "SumireVox" が含まれている前提で、同じプレフィックスのBotを探す
+        other_bot = discord.utils.find(
+            lambda m: m.bot and m.id != self.bot.user.id and ("Sumire" in m.name or "Vox" in m.name),
+            channel.members
+        )
+        if other_bot:
+            embed = discord.Embed(
+                title="🚫 チャンネル重複",
+                description=f"既に **{other_bot.display_name}** がこのチャンネルに参加しています。\n1つのチャンネルに複数のBotを入れることはできません。",
+                color=discord.Color.red()
+            )
+            return await interaction.response.send_message(embed=embed, ephemeral=True)
 
         try:
             # VC接続を試行
@@ -875,7 +930,8 @@ class Voice(commands.Cog):
 
         try:
             settings = await self.bot.db.get_guild_settings(interaction.guild.id)
-            embed = self.create_config_embed(interaction.guild, settings)
+            is_boosted = await self.bot.db.is_guild_boosted(interaction.guild.id)
+            embed = self.create_config_embed(interaction.guild, settings, is_boosted)
             view = ConfigSearchView(self.bot.db, self.bot)
             await interaction.response.send_message(embed=embed, view=view, ephemeral=False)
             view.message = await interaction.original_response()
@@ -888,7 +944,7 @@ class Voice(commands.Cog):
             )
             await interaction.response.send_message(embed=embed, ephemeral=True)
 
-    def create_config_embed(self, guild, settings):
+    def create_config_embed(self, guild, settings, is_boosted=False):
         """設定用Embedを生成する共通メソッド"""
         embed = discord.Embed(
             title="⚙️ サーバー設定",
@@ -898,7 +954,8 @@ class Voice(commands.Cog):
         )
 
         # 基本設定
-        embed.add_field(name="文字数制限", value=f"📝 `{settings.max_chars}` 文字", inline=True)
+        display_limit = settings.max_chars if not is_boosted else 500
+        embed.add_field(name="文字数制限", value=f"📝 `{display_limit}` 文字", inline=True)
         embed.add_field(name="さん付け", value="✅ 有効" if settings.add_suffix else "❌ 無効", inline=True)
         embed.add_field(name="ローマ字読み", value="✅ 有効" if settings.read_romaji else "❌ 無効", inline=True)
 
