@@ -35,8 +35,12 @@ COMMANDS_SYNC: str = str(os.getenv("COMMANDS_SYNC", True))
 
 COGS: list[str] = [
     "src.cogs.voice",
-    "src.cogs.commands"
+    "src.cogs.commands",
+    "src.cogs.boost"
 ]
+
+# マルチインスタンス設定
+MIN_BOOST_LEVEL = int(os.getenv("MIN_BOOST_LEVEL", "0"))
 
 
 class SumireVox(commands.Bot):
@@ -51,8 +55,23 @@ class SumireVox(commands.Bot):
         self.vv_client: VoicevoxClient | None = VoicevoxClient()
         self.db: Database | None = Database()
 
+        # サブBotの場合は、インタラクションをサイレント無視するためのチェックを追加
+        async def global_interaction_check(interaction: discord.Interaction) -> bool:
+            if MIN_BOOST_LEVEL == 0:
+                return True
+            
+            # サブBotの場合、そのサーバーでアクティブか確認
+            if not interaction.guild_id:
+                return False
+            
+            is_active = await self.db.is_instance_active(interaction.guild_id)
+            # 非アクティブならサイレント無視 (False を返すとコマンドは実行されない)
+            return is_active
+
+        self.tree.interaction_check = global_interaction_check
+
     async def setup_hook(self) -> None:
-        logger.info("初期化シーケンスを開始します...")
+        logger.info(f"初期化シーケンスを開始します... (MIN_BOOST_LEVEL: {MIN_BOOST_LEVEL})")
 
         loop = asyncio.get_event_loop()
 
@@ -70,7 +89,13 @@ class SumireVox(commands.Bot):
             raise
 
         logger.info("Cogs の読み込みを開始します")
-        for cog in COGS:
+        # サブBotの場合、読み上げ以外のCog（Commands, Boost等）を読み込まないようにフィルタリング
+        target_cogs = COGS
+        if MIN_BOOST_LEVEL > 0:
+            target_cogs = ["src.cogs.voice"]
+            logger.info("サブBotモードのため、読み上げ用Cogのみを読み込みます")
+
+        for cog in target_cogs:
             try:
                 await self.load_extension(cog)
                 logger.success(f"ロード: {cog}")
@@ -115,7 +140,18 @@ class SumireVox(commands.Bot):
     async def on_ready(self) -> None:
         if hasattr(self, "_ready_logged"):
             return
-        _ready_logged = True
+        self._ready_logged = True
+
+        # Activity の設定
+        if MIN_BOOST_LEVEL == 0:
+            activity = discord.Activity(name="/help | 1台目", type=discord.ActivityType.playing)
+        else:
+            activity = discord.Activity(name=f"読み上げ専用 | {MIN_BOOST_LEVEL + 1}台目", type=discord.ActivityType.playing)
+        await self.change_presence(activity=activity)
+
+        # サブBotガード: メインBotがサーバーにいるか確認するタスクを開始
+        if MIN_BOOST_LEVEL > 0:
+            asyncio.create_task(self.main_bot_presence_check())
 
         vv_url = f"http://{VOICEVOX_HOST}:{VOICEVOX_PORT}"
         web_url = f"http://localhost:{WEB_PORT}"
@@ -132,6 +168,7 @@ class SumireVox(commands.Bot):
         table.add_column("ステータス / URL", style="white")
 
         table.add_row("ログインユーザー", f"{self.user} ({self.user.id})")
+        table.add_row("インスタンス", f"{MIN_BOOST_LEVEL + 1}台目 (Level: {MIN_BOOST_LEVEL})")
         table.add_row("接続サーバー数", f"{len(self.guilds)} guilds")
 
         # エンジンの情報を表示
@@ -140,6 +177,21 @@ class SumireVox(commands.Bot):
 
         console.print(table)
         logger.success("SumireVox は正常に起動し、待機中です。")
+
+    async def main_bot_presence_check(self):
+        """サブBot専用: メインBotが不在のサーバーで警告を出す（定期チェック）"""
+        await self.wait_until_ready()
+        main_bot_id = os.getenv("MAIN_BOT_ID")
+        if not main_bot_id:
+            logger.warning("MAIN_BOT_ID が未設定のため、メイン不在チェックをスキップします。")
+            return
+
+        while not self.is_closed():
+            for guild in self.guilds:
+                if not guild.get_member(int(main_bot_id)):
+                    # メインBotがいない場合、ログを出力（必要に応じてサーバーに通知も可）
+                    logger.warning(f"[{guild.id}] メインBotが不在です。サブBot({self.user.id})は正常に動作しない可能性があります。")
+            await asyncio.sleep(3600)  # 1時間ごとにチェック
 
 
 if __name__ == "__main__":
