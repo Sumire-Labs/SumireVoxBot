@@ -47,3 +47,16 @@ class GuildDict(BaseModel):
 
     # 読み
     reading: str = Field(description="新しい読み")
+
+
+class GuildBoost(BaseModel):
+    id: int
+    guild_id: int
+    user_id: str
+
+
+class UserBilling(BaseModel):
+    discord_id: str
+    stripe_customer_id: str | None = None
+    total_slots: int = 0
+    boosts: list[GuildBoost] = []
