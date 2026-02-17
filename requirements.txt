@@ -17,3 +17,4 @@ ffmpeg
 romkan2
 emoji
 uuid
+async-lru
