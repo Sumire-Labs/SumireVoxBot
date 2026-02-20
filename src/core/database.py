@@ -62,29 +62,34 @@ class Database:
                       CREATE OR REPLACE FUNCTION notify_settings_change()
                           RETURNS TRIGGER AS \
                       $$
+                      DECLARE
+                          record_id   BIGINT;
+                          record_data JSONB;
                       BEGIN
+                          CASE TG_TABLE_NAME
+                              WHEN 'guild_settings' THEN record_id := NEW.guild_id; \
+                                                         record_data := NEW.settings;
+                              WHEN 'dict' THEN record_id := NEW.guild_id; \
+                                               record_data := NEW.dict;
+                              WHEN 'user_settings' THEN record_id := NEW.user_id; \
+                                                        record_data := json_build_object( \
+                                                                'speaker', NEW.speaker, \
+                                                                'speed', NEW.speed, \
+                                                                'pitch', NEW.pitch \
+                                                                       );
+                              WHEN 'guild_boosts' THEN record_id := NEW.guild_id; \
+                                                       record_data := NULL;
+                              ELSE record_id := NULL; \
+                                   record_data := NULL;
+                              END CASE;
+
                           PERFORM pg_notify(
                                   'settings_change',
                                   json_build_object(
                                           'table', TG_TABLE_NAME,
                                           'operation', TG_OP,
-                                          'id', CASE
-                                                    WHEN TG_TABLE_NAME = 'guild_settings' THEN NEW.guild_id
-                                                    WHEN TG_TABLE_NAME = 'dict' THEN NEW.guild_id
-                                                    WHEN TG_TABLE_NAME = 'user_settings' THEN NEW.user_id
-                                                    WHEN TG_TABLE_NAME = 'guild_boosts' THEN NEW.guild_id
-                                                    ELSE NULL
-                                              END,
-                                          'data', CASE
-                                                      WHEN TG_TABLE_NAME = 'guild_settings' THEN NEW.settings
-                                                      WHEN TG_TABLE_NAME = 'dict' THEN NEW.dict
-                                                      WHEN TG_TABLE_NAME = 'user_settings' THEN json_build_object(
-                                                              'speaker', NEW.speaker,
-                                                              'speed', NEW.speed,
-                                                              'pitch', NEW.pitch
-                                                                                                )
-                                                      ELSE NULL
-                                              END
+                                          'id', record_id,
+                                          'data', record_data
                                   )::text
                                   );
                           RETURN NEW;
@@ -96,19 +101,23 @@ class Database:
                       CREATE OR REPLACE FUNCTION notify_settings_delete()
                           RETURNS TRIGGER AS \
                       $$
+                      DECLARE
+                          record_id BIGINT;
                       BEGIN
+                          CASE TG_TABLE_NAME
+                              WHEN 'guild_settings' THEN record_id := OLD.guild_id;
+                              WHEN 'dict' THEN record_id := OLD.guild_id;
+                              WHEN 'user_settings' THEN record_id := OLD.user_id;
+                              WHEN 'guild_boosts' THEN record_id := OLD.guild_id;
+                              ELSE record_id := NULL;
+                              END CASE;
+
                           PERFORM pg_notify(
                                   'settings_change',
                                   json_build_object(
                                           'table', TG_TABLE_NAME,
                                           'operation', 'DELETE',
-                                          'id', CASE
-                                                    WHEN TG_TABLE_NAME = 'guild_settings' THEN OLD.guild_id
-                                                    WHEN TG_TABLE_NAME = 'dict' THEN OLD.guild_id
-                                                    WHEN TG_TABLE_NAME = 'user_settings' THEN OLD.user_id
-                                                    WHEN TG_TABLE_NAME = 'guild_boosts' THEN OLD.guild_id
-                                                    ELSE NULL
-                                              END
+                                          'id', record_id
                                   )::text
                                   );
                           RETURN OLD;
