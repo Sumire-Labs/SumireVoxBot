@@ -356,7 +356,11 @@ class Voice(commands.Cog):
         is_boosted = await self.bot.db.is_guild_boosted(message.guild.id)
         
         # ブーストされている場合は制限を緩和
-        max_chars = settings.max_chars if not is_boosted else 500
+        # 無料: 50文字固定, 1ブースト以上: 設定値（最大200文字）
+        if is_boosted:
+            max_chars = min(settings.max_chars, 200)
+        else:
+            max_chars = 50
         
         logger.debug(f"[DEBUG] Processing message. is_boosted={is_boosted}, max_chars={max_chars}")
         
@@ -632,6 +636,13 @@ class Voice(commands.Cog):
             return
 
         try:
+            # プレミアムチェック (ブーストされていない場合は自動接続をスキップ)
+            is_boosted = await self.bot.db.is_guild_boosted(member.guild.id)
+            if not is_boosted:
+                # ログを出しすぎるとうるさいのでDEBUG
+                # logger.debug(f"[{member.guild.id}] プレミアム未加入のため、自動接続をスキップしました。")
+                return
+
             settings = await self.bot.db.get_guild_settings(member.guild.id)
         except Exception as e:
             logger.error(f"[{member.guild.id}] 自動接続用の設定取得に失敗: {e}")
@@ -888,6 +899,20 @@ class Voice(commands.Cog):
         pitch="自分の声のピッチを変更できます (デフォルトは0.0)"
     )
     async def set_voice(self, interaction: discord.Interaction, speaker: int, speed: float = 1.0, pitch: float = 0.0):
+        # ブーストチェック
+        is_boosted = await self.bot.db.is_guild_boosted(interaction.guild.id)
+        
+        # 無料版制限: 速度・ピッチはデフォルト以外不可
+        if not is_boosted:
+            if speed != 1.0 or pitch != 0.0:
+                embed = discord.Embed(
+                    title="💎 プレミアム機能",
+                    description="読み上げ速度とピッチの変更は**プレミアムプラン（1ブースト以上）**限定機能です。\n"
+                                "現在はキャラクターの変更のみご利用いただけます。",
+                    color=discord.Color.gold()
+                )
+                return await interaction.response.send_message(embed=embed, ephemeral=True)
+
         # バリデーション
         speed = max(0.5, min(2.0, speed))
         pitch = max(-0.15, min(0.15, pitch))
@@ -984,8 +1009,14 @@ class Voice(commands.Cog):
         )
 
         # 基本設定
-        display_limit = settings.max_chars if not is_boosted else 500
-        embed.add_field(name="文字数制限", value=f"📝 `{display_limit}` 文字", inline=True)
+        # 無料: 50文字固定, 1ブースト以上: 設定値（最大200文字）
+        if is_boosted:
+            effective_limit = min(settings.max_chars, 200)
+            char_limit_text = f"📝 `{effective_limit}` 文字 (設定: {settings.max_chars})"
+        else:
+            char_limit_text = "📝 `50` 文字 (無料版制限)"
+            
+        embed.add_field(name="文字数制限", value=char_limit_text, inline=True)
         embed.add_field(name="さん付け", value="✅ 有効" if settings.add_suffix else "❌ 無効", inline=True)
         embed.add_field(name="ローマ字読み", value="✅ 有効" if settings.read_romaji else "❌ 無効", inline=True)
 
