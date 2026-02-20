@@ -810,8 +810,12 @@ class Voice(commands.Cog):
     async def leave(self, interaction: discord.Interaction):
         try:
             if interaction.guild.voice_client:
-                # チャンネルの記憶を削除
                 self.read_channels.pop(interaction.guild.id, None)
+
+                # 辞書をアンロード
+                self.bot.db.unload_guild_dict(interaction.guild.id)
+
+                await interaction.guild.voice_client.disconnect(force=True)
 
                 try:
                     await interaction.guild.voice_client.disconnect(force=True)
