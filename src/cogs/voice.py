@@ -712,10 +712,11 @@ class Voice(commands.Cog):
         if len(non_bot_members) == 0:
             logger.info(f"[{member.guild.id}] VC({target_channel.name})にユーザーがいなくなったため自動切断します。")
 
-            # 内部情報のクリア（read_channels など）
             self.read_channels.pop(member.guild.id, None)
 
-            # 切断
+            # 辞書をアンロード
+            self.bot.db.unload_guild_dict(member.guild.id)
+
             await voice_client.disconnect(force=True)
 
     @app_commands.command(name="join", description="ボイスチャンネルに接続し、このチャンネルを読み上げます")
