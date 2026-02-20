@@ -171,22 +171,55 @@ class Database:
 
     async def activate_guild_boost(self, guild_id: int, user_id: int) -> bool:
         """ギルドにブーストを適用する"""
-        # すでにブーストされているか確認
-        if await self.is_guild_boosted(int(guild_id)):
-            return False
+        guild_id_int = int(guild_id)
+        user_id_str = str(user_id)
         
-        # スロットに空きがあるか確認
-        status = await self.get_user_slots_status(user_id)
-        if status["total"] <= status["used"]:
-            return False
+        # 現在のBot台数を最大数とする
+        bot_instances = await self.get_bot_instances()
+        max_boosts = len(bot_instances)
 
         async with self.pool.acquire() as conn:
-            await conn.execute(BillingQueries.INSERT_BOOST, int(guild_id), str(user_id))
-        
-        self.get_guild_boost_count.cache_clear()
-        self.is_guild_boosted.cache_clear()
-        logger.info(f"User {user_id} boosted guild {guild_id}")
-        return True
+            async with conn.transaction():
+                # 1. Lock user and check slots
+                user = await conn.fetchrow(
+                    "SELECT total_slots FROM users WHERE discord_id = $1 FOR UPDATE",
+                    user_id_str
+                )
+                if not user:
+                    logger.warning(f"Activate boost failed: User {user_id_str} not found in users table")
+                    return False
+                
+                total_slots = user["total_slots"]
+                
+                # 2. Count used slots by this user
+                used_slots = await conn.fetchval(
+                    "SELECT COUNT(*) FROM guild_boosts WHERE user_id = $1",
+                    user_id_str
+                )
+                
+                if used_slots >= total_slots:
+                    logger.warning(f"Activate boost failed: User {user_id_str} has no empty slots ({used_slots}/{total_slots})")
+                    return False
+                
+                # 3. Check guild boost count (limit check)
+                current_guild_boosts = await conn.fetchval(
+                    "SELECT COUNT(*) FROM guild_boosts WHERE guild_id = $1::BIGINT",
+                    guild_id_int
+                )
+                if current_guild_boosts >= max_boosts:
+                    logger.warning(f"Activate boost failed: Guild {guild_id_int} already at max boosts ({current_guild_boosts}/{max_boosts})")
+                    return False
+                    
+                # 4. Insert boost
+                await conn.execute(
+                    "INSERT INTO guild_boosts (guild_id, user_id) VALUES ($1::BIGINT, $2)",
+                    guild_id_int,
+                    user_id_str
+                )
+                
+                self.get_guild_boost_count.cache_clear()
+                logger.info(f"User {user_id_str} successfully boosted guild {guild_id_int}")
+                return True
 
     async def deactivate_guild_boost(self, guild_id: int, user_id: int) -> bool:
         """ギルドのブーストを解除する。1つだけ削除するようにCTIDを使用"""
@@ -216,7 +249,6 @@ class Database:
                 
                 if success:
                     self.get_guild_boost_count.cache_clear()
-                    self.is_guild_boosted.cache_clear()
                     logger.info(f"User {user_id_str} removed one boost from guild {guild_id_int} (Status: {status})")
                 else:
                     logger.warning(f"Failed to delete boost row with ctid {row['ctid']} for user {user_id_str} (Status: {status})")
@@ -228,7 +260,6 @@ class Database:
         async with self.pool.acquire() as conn:
             await conn.execute("DELETE FROM guild_boosts WHERE guild_id = $1::BIGINT", int(guild_id))
             self.get_guild_boost_count.cache_clear()
-            self.is_guild_boosted.cache_clear()
             logger.info(f"Cleared all boosts for guild {guild_id} due to bot leave/kick")
 
     async def close(self):
