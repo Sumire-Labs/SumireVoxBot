@@ -755,11 +755,11 @@ class Voice(commands.Cog):
             return await interaction.response.send_message(embed=embed, ephemeral=True)
 
         try:
-            # VC接続を試行
             await channel.connect()
-
-            # 読み上げチャンネルを記憶
             self.read_channels[interaction.guild.id] = interaction.channel.id
+
+            # 辞書をロード
+            await self.bot.db.load_guild_dict(interaction.guild.id)
 
             logger.success(f"[{interaction.guild.id}] {channel.name} に接続しました。")
 
