@@ -639,8 +639,7 @@ class Voice(commands.Cog):
             # プレミアムチェック (ブーストされていない場合は自動接続をスキップ)
             is_boosted = await self.bot.db.is_guild_boosted(member.guild.id)
             if not is_boosted:
-                # ログを出しすぎるとうるさいのでDEBUG
-                # logger.debug(f"[{member.guild.id}] プレミアム未加入のため、自動接続をスキップしました。")
+                logger.debug(f"[{member.guild.id}] プレミアム未加入のため、自動接続をスキップしました。")
                 return
 
             settings = await self.bot.db.get_guild_settings(member.guild.id)
@@ -814,8 +813,6 @@ class Voice(commands.Cog):
 
                 # 辞書をアンロード
                 self.bot.db.unload_guild_dict(interaction.guild.id)
-
-                await interaction.guild.voice_client.disconnect(force=True)
 
                 try:
                     await interaction.guild.voice_client.disconnect(force=True)
