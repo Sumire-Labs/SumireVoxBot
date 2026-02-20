@@ -1,16 +1,21 @@
-import json
+# src/core/database.py
 
+import json
+import asyncio
 import asyncpg
 import os
 from loguru import logger
 from src.core.models import GuildSettings
+from src.core.cache import SettingsCache
 from src.queries import UserSettingsQueries, DictQueries, GuildSettingsQueries, BillingQueries
-from async_lru import alru_cache
 
 
 class Database:
     def __init__(self):
-        self.pool = None
+        self.pool: asyncpg.Pool | None = None
+        self.cache = SettingsCache()
+        self._listener_connection: asyncpg.Connection | None = None
+        self._listener_task: asyncio.Task | None = None
 
     async def connect(self):
         if self.pool is None:
@@ -19,7 +24,9 @@ class Database:
                 password=os.getenv("POSTGRES_PASSWORD"),
                 database=os.getenv("POSTGRES_DB"),
                 host=os.getenv("POSTGRES_HOST"),
-                port=os.getenv("POSTGRES_PORT")
+                port=os.getenv("POSTGRES_PORT"),
+                min_size=2,
+                max_size=10
             )
 
     async def init_db(self):
@@ -27,98 +34,456 @@ class Database:
             await self.connect()
 
         async with self.pool.acquire() as conn:
-            # ユーザー設定
+            # テーブル作成
             await conn.execute(UserSettingsQueries.CREATE_TABLE)
-            # サーバーごとの辞書
             await conn.execute(DictQueries.CREATE_TABLE)
-            # サーバーごとの設定
             await conn.execute(GuildSettingsQueries.CREATE_TABLE)
-
-            # 課金関連
             await conn.execute(BillingQueries.CREATE_USERS_TABLE)
             await conn.execute(BillingQueries.CREATE_BOOSTS_TABLE)
             await conn.execute(BillingQueries.CREATE_BOOSTS_GUILD_INDEX)
             await conn.execute(BillingQueries.CREATE_BOOSTS_USER_INDEX)
 
-    async def get_guild_settings(self, guild_id: int) -> GuildSettings:
-        """サーバー設定を取得する。型が文字列でも辞書でも対応できるようにする"""
-        row = await self.pool.fetchrow(GuildSettingsQueries.GET_SETTINGS, guild_id)
+            # トリガー作成
+            await self._setup_triggers(conn)
 
-        if row:
-            raw_data = row['settings']
+        # グローバル辞書IDを設定
+        self.cache.global_dict_id = int(os.getenv("GLOBAL_DICT_ID", "0"))
 
-            # もしデータが文字列(str)で返ってきたら辞書に変換
-            if isinstance(raw_data, str):
+        # 起動時データロード
+        await self._load_initial_data()
+
+        # LISTEN開始
+        await self._start_listener()
+
+    async def _setup_triggers(self, conn: asyncpg.Connection):
+        """通知トリガーをセットアップ"""
+        trigger_sql = """
+                      -- 通知用の関数（INSERT/UPDATE）
+                      CREATE OR REPLACE FUNCTION notify_settings_change()
+                          RETURNS TRIGGER AS \
+                      $$
+                      BEGIN
+                          PERFORM pg_notify(
+                                  'settings_change',
+                                  json_build_object(
+                                          'table', TG_TABLE_NAME,
+                                          'operation', TG_OP,
+                                          'id', CASE
+                                                    WHEN TG_TABLE_NAME = 'guild_settings' THEN NEW.guild_id
+                                                    WHEN TG_TABLE_NAME = 'dict' THEN NEW.guild_id
+                                                    WHEN TG_TABLE_NAME = 'user_settings' THEN NEW.user_id
+                                                    WHEN TG_TABLE_NAME = 'guild_boosts' THEN NEW.guild_id
+                                                    ELSE NULL
+                                              END,
+                                          'data', CASE
+                                                      WHEN TG_TABLE_NAME = 'guild_settings' THEN NEW.settings
+                                                      WHEN TG_TABLE_NAME = 'dict' THEN NEW.dict
+                                                      WHEN TG_TABLE_NAME = 'user_settings' THEN json_build_object(
+                                                              'speaker', NEW.speaker,
+                                                              'speed', NEW.speed,
+                                                              'pitch', NEW.pitch
+                                                                                                )
+                                                      ELSE NULL
+                                              END
+                                  )::text
+                                  );
+                          RETURN NEW;
+                      END;
+
+                      $$ LANGUAGE plpgsql;
+
+                      -- 通知用の関数（DELETE）
+                      CREATE OR REPLACE FUNCTION notify_settings_delete()
+                          RETURNS TRIGGER AS \
+                      $$
+                      BEGIN
+                          PERFORM pg_notify(
+                                  'settings_change',
+                                  json_build_object(
+                                          'table', TG_TABLE_NAME,
+                                          'operation', 'DELETE',
+                                          'id', CASE
+                                                    WHEN TG_TABLE_NAME = 'guild_settings' THEN OLD.guild_id
+                                                    WHEN TG_TABLE_NAME = 'dict' THEN OLD.guild_id
+                                                    WHEN TG_TABLE_NAME = 'user_settings' THEN OLD.user_id
+                                                    WHEN TG_TABLE_NAME = 'guild_boosts' THEN OLD.guild_id
+                                                    ELSE NULL
+                                              END
+                                  )::text
+                                  );
+                          RETURN OLD;
+                      END;
+
+                      $$ LANGUAGE plpgsql;
+
+                      -- guild_settings トリガー
+                      DROP TRIGGER IF EXISTS guild_settings_notify ON guild_settings;
+                      CREATE TRIGGER guild_settings_notify
+                          AFTER INSERT OR UPDATE \
+                          ON guild_settings
+                          FOR EACH ROW \
+                      EXECUTE FUNCTION notify_settings_change();
+
+                      DROP TRIGGER IF EXISTS guild_settings_delete_notify ON guild_settings;
+                      CREATE TRIGGER guild_settings_delete_notify
+                          AFTER DELETE \
+                          ON guild_settings
+                          FOR EACH ROW \
+                      EXECUTE FUNCTION notify_settings_delete();
+
+                      -- dict トリガー
+                      DROP TRIGGER IF EXISTS dict_notify ON dict;
+                      CREATE TRIGGER dict_notify
+                          AFTER INSERT OR UPDATE \
+                          ON dict
+                          FOR EACH ROW \
+                      EXECUTE FUNCTION notify_settings_change();
+
+                      DROP TRIGGER IF EXISTS dict_delete_notify ON dict;
+                      CREATE TRIGGER dict_delete_notify
+                          AFTER DELETE \
+                          ON dict
+                          FOR EACH ROW \
+                      EXECUTE FUNCTION notify_settings_delete();
+
+                      -- user_settings トリガー
+                      DROP TRIGGER IF EXISTS user_settings_notify ON user_settings;
+                      CREATE TRIGGER user_settings_notify
+                          AFTER INSERT OR UPDATE \
+                          ON user_settings
+                          FOR EACH ROW \
+                      EXECUTE FUNCTION notify_settings_change();
+
+                      DROP TRIGGER IF EXISTS user_settings_delete_notify ON user_settings;
+                      CREATE TRIGGER user_settings_delete_notify
+                          AFTER DELETE \
+                          ON user_settings
+                          FOR EACH ROW \
+                      EXECUTE FUNCTION notify_settings_delete();
+
+                      -- guild_boosts トリガー
+                      DROP TRIGGER IF EXISTS guild_boosts_notify ON guild_boosts;
+                      CREATE TRIGGER guild_boosts_notify
+                          AFTER INSERT \
+                          ON guild_boosts
+                          FOR EACH ROW \
+                      EXECUTE FUNCTION notify_settings_change();
+
+                      DROP TRIGGER IF EXISTS guild_boosts_delete_notify ON guild_boosts;
+                      CREATE TRIGGER guild_boosts_delete_notify
+                          AFTER DELETE \
+                          ON guild_boosts
+                          FOR EACH ROW \
+                      EXECUTE FUNCTION notify_settings_delete(); \
+                      """
+        await conn.execute(trigger_sql)
+        logger.info("Database triggers initialized")
+
+    async def _load_initial_data(self):
+        """起動時に必要なデータをキャッシュにロード"""
+        logger.info("Loading initial data to cache...")
+
+        async with self.pool.acquire() as conn:
+            # ギルド設定（全件）
+            rows = await conn.fetch("SELECT guild_id, settings FROM guild_settings")
+            for row in rows:
                 try:
-                    raw_data = json.loads(raw_data)
-                except json.JSONDecodeError:
-                    logger.error(f"JSONのパースに失敗しました: {raw_data}")
-                    return GuildSettings()
+                    raw_data = row['settings']
+                    if isinstance(raw_data, str):
+                        raw_data = json.loads(raw_data)
+                    settings = GuildSettings.model_validate(raw_data)
+                    self.cache.set_guild_settings(row['guild_id'], settings)
+                except Exception as e:
+                    logger.error(f"Failed to load guild settings {row['guild_id']}: {e}")
 
-            # 辞書(dict)としてPydanticでバリデーション
-            return GuildSettings.model_validate(raw_data)
+            # ユーザー設定（全件）
+            rows = await conn.fetch("SELECT user_id, speaker, speed, pitch FROM user_settings")
+            for row in rows:
+                self.cache.set_user_setting(row['user_id'], {
+                    "speaker": row['speaker'],
+                    "speed": row['speed'],
+                    "pitch": row['pitch']
+                })
 
-        # データがない場合はデフォルト設定
-        return GuildSettings()
-
-    async def set_guild_settings(self, guild_id: int, settings: GuildSettings):
-        """サーバー設定を保存する"""
-        # Pydanticモデルを辞書に変換
-        settings_dict = settings.model_dump()
-        settings_json = json.dumps(settings_dict)
-
-        # INSERT ... ON CONFLICT (UPSERT) で保存
-        await self.pool.execute(GuildSettingsQueries.SET_SETTINGS, guild_id, settings_json)
-
-        logger.debug(f"[{guild_id}] サーバー設定を更新しました。")
-
-    # ユーザー設定の取得
-    async def get_user_setting(self, user_id: int):
-        async with self.pool.acquire() as conn:
-            row = await conn.fetchrow(
-                UserSettingsQueries.GET_SETTINGS,
-                user_id
+            # ブーストカウント（全件）
+            rows = await conn.fetch(
+                "SELECT guild_id, COUNT(*) as count FROM guild_boosts GROUP BY guild_id"
             )
-            if row:
-                return {"speaker": row['speaker'], "speed": row['speed'], "pitch": row['pitch']}
-            return {"speaker": 1, "speed": 1.0, "pitch": 0.0}
+            for row in rows:
+                self.cache.set_boost_count(row['guild_id'], row['count'])
 
-    # ユーザー設定の保存
-    async def set_user_setting(self, user_id: int, speaker: int, speed: float, pitch: float):
-        async with self.pool.acquire() as conn:
-            await conn.execute(UserSettingsQueries.SET_SETTINGS, user_id, speaker, speed, pitch)
+            # グローバル辞書のみロード
+            if self.cache.global_dict_id:
+                row = await conn.fetchrow(DictQueries.GET_DICT, self.cache.global_dict_id)
+                if row:
+                    raw_data = row['dict']
+                    if isinstance(raw_data, str):
+                        raw_data = json.loads(raw_data)
+                    self.cache.set_dict(self.cache.global_dict_id, raw_data)
+                    logger.info(f"Global dictionary loaded: {len(raw_data)} entries")
 
-    async def get_dict(self, guild_id: int):
-        """特定のギルドの辞書を辞書形式で取得"""
+        self.cache._initialized = True
+        stats = self.cache.stats()
+        logger.success(
+            f"Cache initialized: {stats['guild_settings']} guilds, "
+            f"{stats['user_settings']} users, {stats['boost_counts']} boost records"
+        )
+
+    # ========================================
+    # LISTEN/NOTIFY
+    # ========================================
+    async def _start_listener(self):
+        """LISTEN/NOTIFY のリスナーを開始"""
+        self._listener_connection = await asyncpg.connect(
+            user=os.getenv("POSTGRES_USER"),
+            password=os.getenv("POSTGRES_PASSWORD"),
+            database=os.getenv("POSTGRES_DB"),
+            host=os.getenv("POSTGRES_HOST"),
+            port=os.getenv("POSTGRES_PORT")
+        )
+
+        await self._listener_connection.add_listener('settings_change', self._on_notification)
+        logger.info("Started listening for database notifications")
+
+        self._listener_task = asyncio.create_task(self._keep_listener_alive())
+
+    async def _keep_listener_alive(self):
+        """リスナー接続を維持"""
+        while True:
+            try:
+                await asyncio.sleep(30)
+                if self._listener_connection.is_closed():
+                    logger.warning("Listener connection lost, reconnecting...")
+                    await self._start_listener()
+            except asyncio.CancelledError:
+                break
+            except Exception as e:
+                logger.error(f"Listener keep-alive error: {e}")
+
+    def _on_notification(self, connection, pid, channel, payload):
+        """通知を受け取った時のコールバック"""
+        try:
+            data = json.loads(payload)
+            table = data.get('table')
+            operation = data.get('operation')
+            record_id = data.get('id')
+            record_data = data.get('data')
+
+            logger.debug(f"[NOTIFY] {operation} on {table}, id={record_id}")
+
+            if table == 'guild_settings':
+                self._handle_guild_settings_change(operation, record_id, record_data)
+            elif table == 'dict':
+                self._handle_dict_change(operation, record_id, record_data)
+            elif table == 'user_settings':
+                self._handle_user_settings_change(operation, record_id, record_data)
+            elif table == 'guild_boosts':
+                self._handle_boost_change(operation, record_id)
+
+        except Exception as e:
+            logger.error(f"Failed to process notification: {e}")
+
+    def _handle_guild_settings_change(self, operation: str, guild_id: int, data):
+        if operation == 'DELETE':
+            self.cache.invalidate_guild_settings(guild_id)
+        else:
+            try:
+                if isinstance(data, str):
+                    data = json.loads(data)
+                settings = GuildSettings.model_validate(data)
+                self.cache.set_guild_settings(guild_id, settings)
+                logger.debug(f"[Cache] Guild settings updated via NOTIFY: {guild_id}")
+            except Exception as e:
+                logger.error(f"Failed to update guild settings cache: {e}")
+                self.cache.invalidate_guild_settings(guild_id)
+
+    def _handle_dict_change(self, operation: str, guild_id: int, data):
+        # グローバル辞書は常に更新
+        if guild_id == self.cache.global_dict_id:
+            if operation == 'DELETE':
+                self.cache.set_dict(guild_id, {})
+            else:
+                try:
+                    if isinstance(data, str):
+                        data = json.loads(data)
+                    self.cache.set_dict(guild_id, data)
+                    logger.debug(f"[Cache] Global dictionary updated via NOTIFY")
+                except Exception as e:
+                    logger.error(f"Failed to update global dict cache: {e}")
+            return
+
+        # 通常の辞書はVC接続中のギルドのみ更新
+        if self.cache.is_guild_active(guild_id):
+            if operation == 'DELETE':
+                self.cache.set_dict(guild_id, {})
+            else:
+                try:
+                    if isinstance(data, str):
+                        data = json.loads(data)
+                    self.cache.set_dict(guild_id, data)
+                    logger.debug(f"[Cache] Dictionary updated via NOTIFY: {guild_id}")
+                except Exception as e:
+                    logger.error(f"Failed to update dict cache: {e}")
+
+    def _handle_user_settings_change(self, operation: str, user_id: int, data):
+        if operation == 'DELETE':
+            self.cache.invalidate_user_setting(user_id)
+        else:
+            try:
+                if isinstance(data, str):
+                    data = json.loads(data)
+                self.cache.set_user_setting(user_id, data)
+                logger.debug(f"[Cache] User settings updated via NOTIFY: {user_id}")
+            except Exception as e:
+                logger.error(f"Failed to update user settings cache: {e}")
+                self.cache.invalidate_user_setting(user_id)
+
+    def _handle_boost_change(self, operation: str, guild_id: int):
+        if operation == 'DELETE':
+            self.cache.decrement_boost_count(guild_id)
+        elif operation == 'INSERT':
+            self.cache.increment_boost_count(guild_id)
+        logger.debug(f"[Cache] Boost count updated via NOTIFY: {guild_id}")
+
+    # ========================================
+    # 辞書の動的ロード/アンロード
+    # ========================================
+    async def load_guild_dict(self, guild_id: int):
+        """VC接続時に辞書をロード"""
+        self.cache.add_active_guild(guild_id)
+
+        # 既にロード済みならスキップ
+        if self.cache.is_dict_loaded(guild_id):
+            return
+
         async with self.pool.acquire() as conn:
             row = await conn.fetchrow(DictQueries.GET_DICT, guild_id)
             if row:
                 raw_data = row['dict']
-
-                # もしデータが文字列(str)で返ってきたら辞書に変換
                 if isinstance(raw_data, str):
-                    try:
-                        return json.loads(raw_data)
-                    except json.JSONDecodeError:
-                        logger.error(f"辞書のJSONパースに失敗しました: {raw_data}")
-                        return {}
+                    raw_data = json.loads(raw_data)
+                self.cache.set_dict(guild_id, raw_data)
+            else:
+                self.cache.set_dict(guild_id, {})
 
-                # 辞書(dict)として返す
+        logger.info(f"[{guild_id}] Dictionary loaded for voice session")
+
+    def unload_guild_dict(self, guild_id: int):
+        """VC切断時に辞書をアンロード"""
+        self.cache.remove_active_guild(guild_id)
+        self.cache.remove_dict(guild_id)
+        logger.info(f"[{guild_id}] Dictionary unloaded after voice session")
+
+    # ========================================
+    # 公開API（キャッシュ優先）
+    # ========================================
+    async def get_guild_settings(self, guild_id: int) -> GuildSettings:
+        """ギルド設定を取得"""
+        cached = self.cache.get_guild_settings(guild_id)
+        if cached is not None:
+            return cached
+
+        # キャッシュミス時はDBから取得
+        row = await self.pool.fetchrow(GuildSettingsQueries.GET_SETTINGS, guild_id)
+        if row:
+            raw_data = row['settings']
+            if isinstance(raw_data, str):
+                raw_data = json.loads(raw_data)
+            settings = GuildSettings.model_validate(raw_data)
+            self.cache.set_guild_settings(guild_id, settings)
+            return settings
+
+        return GuildSettings()
+
+    async def set_guild_settings(self, guild_id: int, settings: GuildSettings):
+        """ギルド設定を保存"""
+        settings_dict = settings.model_dump()
+        settings_json = json.dumps(settings_dict)
+        await self.pool.execute(GuildSettingsQueries.SET_SETTINGS, guild_id, settings_json)
+        # NOTIFYトリガーによりキャッシュは自動更新
+
+    async def get_user_setting(self, user_id: int) -> dict:
+        """ユーザー設定を取得"""
+        cached = self.cache.get_user_setting(user_id)
+        if cached is not None:
+            return cached
+
+        async with self.pool.acquire() as conn:
+            row = await conn.fetchrow(UserSettingsQueries.GET_SETTINGS, user_id)
+            if row:
+                data = {"speaker": row['speaker'], "speed": row['speed'], "pitch": row['pitch']}
+                self.cache.set_user_setting(user_id, data)
+                return data
+
+        return {"speaker": 1, "speed": 1.0, "pitch": 0.0}
+
+    async def set_user_setting(self, user_id: int, speaker: int, speed: float, pitch: float):
+        """ユーザー設定を保存"""
+        async with self.pool.acquire() as conn:
+            await conn.execute(UserSettingsQueries.SET_SETTINGS, user_id, speaker, speed, pitch)
+        # NOTIFYトリガーによりキャッシュは自動更新
+
+    async def get_dict(self, guild_id: int) -> dict:
+        """辞書を取得"""
+        cached = self.cache.get_dict(guild_id)
+        if cached is not None:
+            return cached
+
+        # キャッシュミス（通常はVC接続時にロード済みのはず）
+        async with self.pool.acquire() as conn:
+            row = await conn.fetchrow(DictQueries.GET_DICT, guild_id)
+            if row:
+                raw_data = row['dict']
+                if isinstance(raw_data, str):
+                    raw_data = json.loads(raw_data)
+                # VC接続中ならキャッシュに保存
+                if self.cache.is_guild_active(guild_id) or guild_id == self.cache.global_dict_id:
+                    self.cache.set_dict(guild_id, raw_data)
                 return raw_data
-            return {}
 
-    # ギルド辞書の登録または更新
+        return {}
+
     async def add_or_update_dict(self, guild_id: int, dict_data: dict):
-        """ギルド辞書を登録または更新する"""
+        """辞書を保存"""
         dict_json = json.dumps(dict_data)
         async with self.pool.acquire() as conn:
             await conn.execute(DictQueries.INSERT_DICT, guild_id, dict_json)
-        logger.debug(f"[{guild_id}] 辞書を更新しました。")
+        # NOTIFYトリガーによりキャッシュは自動更新
         return True
 
-    # 課金・ブースト関連
+    async def get_guild_boost_count(self, guild_id: int) -> int:
+        """ブーストカウントを取得"""
+        guild_id_int = int(guild_id)
+
+        cached = self.cache.get_boost_count(guild_id_int)
+        if cached is not None:
+            return cached
+
+        count = await self.pool.fetchval(BillingQueries.GET_GUILD_BOOST_COUNT, guild_id_int)
+        count = count or 0
+        self.cache.set_boost_count(guild_id_int, count)
+        return count
+
+    async def is_guild_boosted(self, guild_id: int) -> bool:
+        """ブーストされているか確認"""
+        return await self.get_guild_boost_count(int(guild_id)) > 0
+
+    async def is_instance_active(self, guild_id: int) -> bool:
+        """インスタンスがアクティブか判定"""
+        if os.getenv("SKIP_PREMIUM_CHECK", "false").lower() == "true":
+            return True
+
+        min_level = int(os.getenv("MIN_BOOST_LEVEL", "0"))
+        if min_level == 0:
+            return True
+
+        boost_count = await self.get_guild_boost_count(int(guild_id))
+        return boost_count >= (min_level + 1)
+
+    # ========================================
+    # その他（既存のまま）
+    # ========================================
     async def get_bot_instances(self) -> list[dict]:
-        """アクティブなBotインスタンス一覧をDBから取得"""
         async with self.pool.acquire() as conn:
             rows = await conn.fetch(
                 "SELECT id, client_id, bot_name, is_active FROM bot_instances WHERE is_active = true ORDER BY id ASC"
@@ -126,142 +491,97 @@ class Database:
             return [dict(r) for r in rows]
 
     async def get_user_slots_status(self, user_id: int) -> dict:
-        """ユーザーのスロット数と使用済みスロット数を取得"""
         row = await self.pool.fetchrow(BillingQueries.GET_USER_SLOTS_STATUS, str(user_id))
         if row:
             return {"total": row["total_slots"], "used": row["used_slots"]}
         return {"total": 0, "used": 0}
 
-    @alru_cache(maxsize=128, ttl=10)
-    async def get_guild_boost_count(self, guild_id: int) -> int:
-        """ギルドの合計ブースト数を取得（キャッシュ付き）"""
-        guild_id_int = int(guild_id)
-        count = await self.pool.fetchval(BillingQueries.GET_GUILD_BOOST_COUNT, guild_id_int)
-        logger.debug(f"[DB DEBUG] get_guild_boost_count(guild_id={guild_id_int}, type={type(guild_id_int)}) -> count={count}")
-        return count
-
-    async def is_guild_boosted(self, guild_id: int) -> bool:
-        """ギルドがブーストされているか確認（キャッシュ付き）"""
-        return await self.get_guild_boost_count(int(guild_id)) > 0
-
-    async def is_instance_active(self, guild_id: int) -> bool:
-        """現在のインスタンスがこのサーバーでアクティブになるべきか判定"""
-        # デバッグ用フラグ
-        if os.getenv("SKIP_PREMIUM_CHECK", "false").lower() == "true":
-            logger.debug(f"[DEBUG] SKIP_PREMIUM_CHECK is True. Instance is active for guild {guild_id}")
-            return True
-
-        min_level = int(os.getenv("MIN_BOOST_LEVEL", "0"))
-        if min_level == 0:
-            logger.debug(f"[DEBUG] MIN_BOOST_LEVEL is 0. Main instance is always active.")
-            return True
-        
-        guild_id_int = int(guild_id)
-        boost_count = await self.get_guild_boost_count(guild_id_int)
-        
-        # 修正: LEVEL 1 (2台目) は 2ブースト以上でアクティブ
-        # つまり boost_count >= (min_level + 1)
-        is_active = boost_count >= (min_level + 1)
-        logger.debug(f"[DEBUG] is_instance_active(guild={guild_id_int}, level={min_level}): count={boost_count} -> active={is_active}")
-        return is_active
-
     async def get_guild_booster(self, guild_id: int) -> str | None:
-        """ギルドをブーストしているユーザーのIDを取得"""
         return await self.pool.fetchval(BillingQueries.GET_GUILD_BOOST_USER, int(guild_id))
 
     async def activate_guild_boost(self, guild_id: int, user_id: int) -> bool:
-        """ギルドにブーストを適用する"""
         guild_id_int = int(guild_id)
         user_id_str = str(user_id)
-        
-        # 現在のBot台数を最大数とする
+
         bot_instances = await self.get_bot_instances()
         max_boosts = len(bot_instances)
 
         async with self.pool.acquire() as conn:
             async with conn.transaction():
-                # 1. Lock user and check slots
                 user = await conn.fetchrow(
                     "SELECT total_slots FROM users WHERE discord_id = $1 FOR UPDATE",
                     user_id_str
                 )
                 if not user:
-                    logger.warning(f"Activate boost failed: User {user_id_str} not found in users table")
+                    logger.warning(f"Activate boost failed: User {user_id_str} not found")
                     return False
-                
+
                 total_slots = user["total_slots"]
-                
-                # 2. Count used slots by this user
                 used_slots = await conn.fetchval(
                     "SELECT COUNT(*) FROM guild_boosts WHERE user_id = $1",
                     user_id_str
                 )
-                
+
                 if used_slots >= total_slots:
-                    logger.warning(f"Activate boost failed: User {user_id_str} has no empty slots ({used_slots}/{total_slots})")
+                    logger.warning(f"Activate boost failed: No empty slots ({used_slots}/{total_slots})")
                     return False
-                
-                # 3. Check guild boost count (limit check)
+
                 current_guild_boosts = await conn.fetchval(
                     "SELECT COUNT(*) FROM guild_boosts WHERE guild_id = $1::BIGINT",
                     guild_id_int
                 )
                 if current_guild_boosts >= max_boosts:
-                    logger.warning(f"Activate boost failed: Guild {guild_id_int} already at max boosts ({current_guild_boosts}/{max_boosts})")
+                    logger.warning(f"Activate boost failed: Guild at max boosts")
                     return False
-                    
-                # 4. Insert boost
+
                 await conn.execute(
                     "INSERT INTO guild_boosts (guild_id, user_id) VALUES ($1::BIGINT, $2)",
                     guild_id_int,
                     user_id_str
                 )
-                
-                self.get_guild_boost_count.cache_clear()
-                logger.info(f"User {user_id_str} successfully boosted guild {guild_id_int}")
+                logger.info(f"User {user_id_str} boosted guild {guild_id_int}")
                 return True
 
     async def deactivate_guild_boost(self, guild_id: int, user_id: int) -> bool:
-        """ギルドのブーストを解除する。1つだけ削除するようにCTIDを使用"""
         guild_id_int = int(guild_id)
         user_id_str = str(user_id)
-        
+
         async with self.pool.acquire() as conn:
             async with conn.transaction():
-                # 1件分のCTIDを取得
                 row = await conn.fetchrow(
                     "SELECT ctid FROM guild_boosts WHERE guild_id = $1::BIGINT AND user_id = $2 LIMIT 1 FOR UPDATE",
                     guild_id_int,
                     user_id_str
                 )
                 if not row:
-                    logger.info(f"Unboost attempt: No boost found for user {user_id_str} in guild {guild_id_int}")
                     return False
-                
-                # CTIDで削除
+
                 status = await conn.execute(
                     "DELETE FROM guild_boosts WHERE ctid = $1",
                     row["ctid"]
                 )
-                
-                # asyncpgのexecuteは "DELETE 1" のような文字列を返す
                 success = status == "DELETE 1"
-                
                 if success:
-                    self.get_guild_boost_count.cache_clear()
-                    logger.info(f"User {user_id_str} removed one boost from guild {guild_id_int} (Status: {status})")
-                else:
-                    logger.warning(f"Failed to delete boost row with ctid {row['ctid']} for user {user_id_str} (Status: {status})")
-                
+                    logger.info(f"User {user_id_str} unboosted guild {guild_id_int}")
                 return success
 
     async def delete_guild_boosts_by_guild(self, guild_id: int):
-        """ギルドの全ブーストを削除（Bot退出時用）"""
         async with self.pool.acquire() as conn:
             await conn.execute("DELETE FROM guild_boosts WHERE guild_id = $1::BIGINT", int(guild_id))
-            self.get_guild_boost_count.cache_clear()
-            logger.info(f"Cleared all boosts for guild {guild_id} due to bot leave/kick")
+        logger.info(f"Cleared all boosts for guild {guild_id}")
 
     async def close(self):
+        if self._listener_task:
+            self._listener_task.cancel()
+            try:
+                await self._listener_task
+            except asyncio.CancelledError:
+                pass
+
+        if self._listener_connection and not self._listener_connection.is_closed():
+            await self._listener_connection.close()
+
         if self.pool:
             await self.pool.close()
+
+        logger.info("Database connections closed")
