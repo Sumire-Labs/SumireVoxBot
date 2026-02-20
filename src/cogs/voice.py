@@ -590,10 +590,11 @@ class Voice(commands.Cog):
 
             logger.warning(f"[{guild_id}] VC切断を確認したため、キューをクリアします。")
 
-            # データの掃除
             self.read_channels.pop(guild_id, None)
 
-            # キューを空にし、進行中の生成タスクをキャンセル
+            # 辞書をアンロード
+            self.bot.db.unload_guild_dict(guild_id)
+
             await _cleanup_queue(guild_id)
 
             logger.warning(f"[{guild_id}] VC切断を検知したため、キューをクリアしました。")
