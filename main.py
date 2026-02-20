@@ -142,6 +142,8 @@ class SumireVox(commands.Bot):
             return
         self._ready_logged = True
 
+        await self._load_active_guild_dicts()
+
         # Activity の設定
         if MIN_BOOST_LEVEL == 0:
             activity = discord.Activity(name="/help | 1台目", type=discord.ActivityType.playing)
@@ -192,6 +194,21 @@ class SumireVox(commands.Bot):
                     # メインBotがいない場合、ログを出力（必要に応じてサーバーに通知も可）
                     logger.warning(f"[{guild.id}] メインBotが不在です。サブBot({self.user.id})は正常に動作しない可能性があります。")
             await asyncio.sleep(3600)  # 1時間ごとにチェック
+
+    async def _load_active_guild_dicts(self):
+        """再起動時に既存のVC接続を復元し、辞書をロード"""
+        for guild in self.guilds:
+            if guild.voice_client and guild.voice_client.is_connected():
+                logger.info(f"[{guild.id}] Restoring voice session after restart")
+                await self.db.load_guild_dict(guild.id)
+
+                # read_channelsの復元は難しいので、再接続が必要な旨をログに出す
+                voice_cog = self.get_cog("Voice")
+                if voice_cog and guild.id not in voice_cog.read_channels:
+                    logger.warning(
+                        f"[{guild.id}] Voice session restored but read channel unknown. "
+                        f"Please use /leave and /join again."
+                    )
 
 
 if __name__ == "__main__":
