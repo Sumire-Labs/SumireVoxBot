@@ -667,10 +667,11 @@ class Voice(commands.Cog):
                 return
 
             try:
-                # 接続処理
                 await after.channel.connect()
-                # 読み上げチャンネルを記憶
                 self.read_channels[member.guild.id] = target_tc_id
+
+                # 辞書をロード
+                await self.bot.db.load_guild_dict(member.guild.id)
 
                 logger.success(f"[{member.guild.id}] 自動接続成功: {after.channel.name}")
 
