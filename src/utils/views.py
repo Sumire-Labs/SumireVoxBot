@@ -309,6 +309,20 @@ class DictionaryAddModal(discord.ui.Modal):
             if not words_dict or not isinstance(words_dict, dict):
                 words_dict = {}
 
+            # プレミアムチェック (登録数上限)
+            is_boosted = await self.bot.db.is_guild_boosted(interaction.guild.id)
+            limit = 100 if is_boosted else 10
+            
+            if len(words_dict) >= limit and word not in words_dict:
+                embed = discord.Embed(
+                    title="💎 登録上限エラー",
+                    description=f"辞書の登録数が上限に達しています。\n"
+                                f"現在のプランの上限: **{limit}** 個\n\n"
+                                f"{'プレミアムプラン（1ブースト）に加入すると、最大100個まで登録可能です。' if not is_boosted else 'これ以上の登録はできません。'}",
+                    color=discord.Color.gold()
+                )
+                return await interaction.response.send_message(embed=embed, ephemeral=True)
+
             # 新しい単語と読みを追加
             words_dict[word] = normalized_reading
 
