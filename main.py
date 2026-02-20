@@ -146,7 +146,7 @@ class SumireVox(commands.Bot):
         if MIN_BOOST_LEVEL == 0:
             activity = discord.Activity(name="/help | 1台目", type=discord.ActivityType.playing)
         else:
-            activity = discord.Activity(name=f"読み上げ専用 | {MIN_BOOST_LEVEL + 1}台目", type=discord.ActivityType.playing)
+            activity = discord.Activity(name=f"読み上げ専用 | {MIN_BOOST_LEVEL}台目", type=discord.ActivityType.playing)
         await self.change_presence(activity=activity)
 
         # サブBotガード: メインBotがサーバーにいるか確認するタスクを開始
