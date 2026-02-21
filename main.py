@@ -170,7 +170,7 @@ class SumireVox(commands.Bot):
         table.add_column("ステータス / URL", style="white")
 
         table.add_row("ログインユーザー", f"{self.user} ({self.user.id})")
-        table.add_row("インスタンス", f"{MIN_BOOST_LEVEL + 1}台目 (Level: {MIN_BOOST_LEVEL})")
+        table.add_row("インスタンス", f"{MIN_BOOST_LEVEL}台目 (Level: {MIN_BOOST_LEVEL})")
         table.add_row("接続サーバー数", f"{len(self.guilds)} guilds")
 
         # エンジンの情報を表示
