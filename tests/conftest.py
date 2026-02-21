@@ -6,8 +6,8 @@ pytest fixtures for SumireVoxBot tests
 import pytest
 import asyncio
 import os
-from unittest.mock import AsyncMock, MagicMock, patch
-from typing import Generator, AsyncGenerator
+from unittest.mock import AsyncMock, MagicMock
+from typing import Generator
 
 # 環境変数のモック設定
 os.environ.setdefault("POSTGRES_USER", "test_user")
@@ -28,33 +28,6 @@ def event_loop() -> Generator[asyncio.AbstractEventLoop, None, None]:
     loop = asyncio.new_event_loop()
     yield loop
     loop.close()
-
-
-@pytest.fixture
-def mock_asyncpg_pool() -> MagicMock:
-    """Mock asyncpg connection pool"""
-    pool = MagicMock()
-    pool.acquire = MagicMock(return_value=AsyncMock())
-    pool.close = AsyncMock()
-    pool.fetchrow = AsyncMock(return_value=None)
-    pool.fetch = AsyncMock(return_value=[])
-    pool.fetchval = AsyncMock(return_value=None)
-    pool.execute = AsyncMock()
-    return pool
-
-
-@pytest.fixture
-def mock_asyncpg_connection() -> AsyncMock:
-    """Mock asyncpg connection"""
-    conn = AsyncMock()
-    conn.execute = AsyncMock()
-    conn.fetch = AsyncMock(return_value=[])
-    conn.fetchrow = AsyncMock(return_value=None)
-    conn.fetchval = AsyncMock(return_value=None)
-    conn.add_listener = AsyncMock()
-    conn.is_closed = MagicMock(return_value=False)
-    conn.close = AsyncMock()
-    return conn
 
 
 @pytest.fixture
