@@ -18,3 +18,4 @@ romkan2
 emoji
 uuid
 async-lru
+pytest
