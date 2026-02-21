@@ -4,6 +4,7 @@ Tests for Database class
 """
 
 import pytest
+import asyncio
 import json
 from unittest.mock import AsyncMock, MagicMock, patch
 from src.core.database import Database
@@ -17,6 +18,26 @@ class TestDatabase:
     def database(self) -> Database:
         """新しい Database インスタンスを作成"""
         return Database()
+
+    @pytest.fixture
+    def mock_asyncpg_pool(self) -> MagicMock:
+        """Mock asyncpg connection pool"""
+        pool = MagicMock()
+        pool.close = AsyncMock()
+        return pool
+
+    @pytest.fixture
+    def mock_asyncpg_connection(self) -> MagicMock:
+        """Mock asyncpg connection"""
+        conn = MagicMock()
+        conn.execute = AsyncMock()
+        conn.fetch = AsyncMock(return_value=[])
+        conn.fetchrow = AsyncMock(return_value=None)
+        conn.fetchval = AsyncMock(return_value=None)
+        conn.add_listener = AsyncMock()
+        conn.is_closed = MagicMock(return_value=False)
+        conn.close = AsyncMock()
+        return conn
 
     # ========================================
     # 初期化テスト
@@ -52,8 +73,12 @@ class TestDatabase:
         mock_conn.fetchrow = AsyncMock(return_value={
             "settings": json.dumps({"auto_join": True, "max_chars": 100})
         })
-        mock_asyncpg_pool.acquire.return_value.__aenter__ = AsyncMock(return_value=mock_conn)
-        mock_asyncpg_pool.acquire.return_value.__aexit__ = AsyncMock(return_value=None)
+
+        # Context manager setup
+        mock_context = AsyncMock()
+        mock_context.__aenter__ = AsyncMock(return_value=mock_conn)
+        mock_context.__aexit__ = AsyncMock(return_value=None)
+        mock_asyncpg_pool.acquire = MagicMock(return_value=mock_context)
 
         result = await database.get_guild_settings(123)
 
@@ -69,8 +94,11 @@ class TestDatabase:
 
         mock_conn = AsyncMock()
         mock_conn.fetchrow = AsyncMock(return_value=None)
-        mock_asyncpg_pool.acquire.return_value.__aenter__ = AsyncMock(return_value=mock_conn)
-        mock_asyncpg_pool.acquire.return_value.__aexit__ = AsyncMock(return_value=None)
+
+        mock_context = AsyncMock()
+        mock_context.__aenter__ = AsyncMock(return_value=mock_conn)
+        mock_context.__aexit__ = AsyncMock(return_value=None)
+        mock_asyncpg_pool.acquire = MagicMock(return_value=mock_context)
 
         result = await database.get_guild_settings(999)
 
@@ -83,8 +111,12 @@ class TestDatabase:
         database.pool = mock_asyncpg_pool
 
         mock_conn = AsyncMock()
-        mock_asyncpg_pool.acquire.return_value.__aenter__ = AsyncMock(return_value=mock_conn)
-        mock_asyncpg_pool.acquire.return_value.__aexit__ = AsyncMock(return_value=None)
+        mock_conn.execute = AsyncMock()
+
+        mock_context = AsyncMock()
+        mock_context.__aenter__ = AsyncMock(return_value=mock_conn)
+        mock_context.__aexit__ = AsyncMock(return_value=None)
+        mock_asyncpg_pool.acquire = MagicMock(return_value=mock_context)
 
         settings = GuildSettings(auto_join=True, max_chars=150)
         await database.set_guild_settings(123, settings)
@@ -112,8 +144,11 @@ class TestDatabase:
 
         mock_conn = AsyncMock()
         mock_conn.fetchrow = AsyncMock(return_value=None)
-        mock_asyncpg_pool.acquire.return_value.__aenter__ = AsyncMock(return_value=mock_conn)
-        mock_asyncpg_pool.acquire.return_value.__aexit__ = AsyncMock(return_value=None)
+
+        mock_context = AsyncMock()
+        mock_context.__aenter__ = AsyncMock(return_value=mock_conn)
+        mock_context.__aexit__ = AsyncMock(return_value=None)
+        mock_asyncpg_pool.acquire = MagicMock(return_value=mock_context)
 
         result = await database.get_user_setting(999)
 
@@ -150,8 +185,11 @@ class TestDatabase:
         mock_conn.fetchrow = AsyncMock(return_value={
             "dict": json.dumps({"test": "テスト"})
         })
-        mock_asyncpg_pool.acquire.return_value.__aenter__ = AsyncMock(return_value=mock_conn)
-        mock_asyncpg_pool.acquire.return_value.__aexit__ = AsyncMock(return_value=None)
+
+        mock_context = AsyncMock()
+        mock_context.__aenter__ = AsyncMock(return_value=mock_conn)
+        mock_context.__aexit__ = AsyncMock(return_value=None)
+        mock_asyncpg_pool.acquire = MagicMock(return_value=mock_context)
 
         await database.load_guild_dict(123)
 
@@ -308,8 +346,11 @@ class TestDatabase:
         mock_conn.fetchrow = AsyncMock(return_value={
             "dict": json.dumps({"global": "グローバル"})
         })
-        mock_asyncpg_pool.acquire.return_value.__aenter__ = AsyncMock(return_value=mock_conn)
-        mock_asyncpg_pool.acquire.return_value.__aexit__ = AsyncMock(return_value=None)
+
+        mock_context = AsyncMock()
+        mock_context.__aenter__ = AsyncMock(return_value=mock_conn)
+        mock_context.__aexit__ = AsyncMock(return_value=None)
+        mock_asyncpg_pool.acquire = MagicMock(return_value=mock_context)
 
         await database._handle_dict_change("UPDATE", 1201)
 
@@ -321,14 +362,119 @@ class TestDatabase:
     # クローズテスト
     # ========================================
     @pytest.mark.asyncio
-    async def test_close(self, database: Database, mock_asyncpg_pool: MagicMock, mock_asyncpg_connection: AsyncMock):
+    async def test_close(self, database: Database, mock_asyncpg_pool: MagicMock, mock_asyncpg_connection: MagicMock):
         """データベース接続のクローズ"""
         database.pool = mock_asyncpg_pool
         database._listener_connection = mock_asyncpg_connection
-        database._listener_task = AsyncMock()
-        database._listener_task.cancel = MagicMock()
+
+        # リスナータスクのモックを作成
+        async def mock_task():
+            await asyncio.sleep(100)  # 長時間待機（キャンセルされる）
+
+        database._listener_task = asyncio.create_task(mock_task())
 
         await database.close()
 
         assert database._shutdown is True
         mock_asyncpg_pool.close.assert_called_once()
+        mock_asyncpg_connection.close.assert_called_once()
+
+    @pytest.mark.asyncio
+    async def test_close_no_listener(self, database: Database, mock_asyncpg_pool: MagicMock):
+        """リスナーがない場合のクローズ"""
+        database.pool = mock_asyncpg_pool
+        database._listener_connection = None
+        database._listener_task = None
+
+        await database.close()
+
+        assert database._shutdown is True
+        mock_asyncpg_pool.close.assert_called_once()
+
+    @pytest.mark.asyncio
+    async def test_close_listener_already_closed(self, database: Database, mock_asyncpg_pool: MagicMock):
+        """リスナー接続が既に閉じている場合"""
+        database.pool = mock_asyncpg_pool
+
+        mock_conn = MagicMock()
+        mock_conn.is_closed = MagicMock(return_value=True)
+        mock_conn.close = AsyncMock()
+        database._listener_connection = mock_conn
+        database._listener_task = None
+
+        await database.close()
+
+        # is_closed が True なので close は呼ばれない
+        mock_conn.close.assert_not_called()
+
+
+class TestDatabaseNotificationCallback:
+    """NOTIFY コールバックのテスト"""
+
+    @pytest.fixture
+    def database(self) -> Database:
+        return Database()
+
+    @pytest.mark.asyncio
+    async def test_handle_notification_guild_settings(self, database: Database):
+        """guild_settings の NOTIFY 処理"""
+        payload = json.dumps({
+            "table": "guild_settings",
+            "operation": "UPDATE",
+            "id": 123,
+            "data": {"auto_join": True, "max_chars": 100}
+        })
+
+        await database._handle_notification(payload)
+
+        result = database.cache.get_guild_settings(123)
+        assert result is not None
+        assert result.auto_join is True
+
+    @pytest.mark.asyncio
+    async def test_handle_notification_user_settings(self, database: Database):
+        """user_settings の NOTIFY 処理"""
+        payload = json.dumps({
+            "table": "user_settings",
+            "operation": "INSERT",
+            "id": 456,
+            "data": {"speaker": 2, "speed": 1.2, "pitch": 0.1}
+        })
+
+        await database._handle_notification(payload)
+
+        result = database.cache.get_user_setting(456)
+        assert result["speaker"] == 2
+
+    @pytest.mark.asyncio
+    async def test_handle_notification_boost(self, database: Database):
+        """guild_boosts の NOTIFY 処理"""
+        database.cache.set_boost_count(123, 1)
+
+        payload = json.dumps({
+            "table": "guild_boosts",
+            "operation": "INSERT",
+            "id": 123,
+            "data": None
+        })
+
+        await database._handle_notification(payload)
+
+        assert database.cache.get_boost_count(123) == 2
+
+    @pytest.mark.asyncio
+    async def test_handle_notification_invalid_json(self, database: Database):
+        """無効な JSON の処理（エラーにならない）"""
+        await database._handle_notification("invalid json")  # エラーにならないことを確認
+
+    @pytest.mark.asyncio
+    async def test_handle_notification_unknown_table(self, database: Database):
+        """未知のテーブルの処理（無視される）"""
+        payload = json.dumps({
+            "table": "unknown_table",
+            "operation": "UPDATE",
+            "id": 123,
+            "data": {}
+        })
+
+        await database._handle_notification(payload)  # エラーにならないことを確認
