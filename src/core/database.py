@@ -257,17 +257,29 @@ class Database:
         self._listener_task = asyncio.create_task(self._keep_listener_alive())
 
     async def _keep_listener_alive(self):
-        """リスナー接続を維持"""
         while True:
             try:
                 await asyncio.sleep(30)
-                if self._listener_connection.is_closed():
+                if self._listener_connection is None or self._listener_connection.is_closed():
                     logger.warning("Listener connection lost, reconnecting...")
-                    await self._start_listener()
+                    await self._reconnect_listener()  # 別メソッドで再接続のみ行う
             except asyncio.CancelledError:
                 break
             except Exception as e:
                 logger.error(f"Listener keep-alive error: {e}")
+                await asyncio.sleep(5)  # エラー時は少し待ってリトライ
+
+    async def _reconnect_listener(self):
+        """リスナー接続のみを再確立（タスクは再作成しない）"""
+        try:
+            if self._listener_connection and not self._listener_connection.is_closed():
+                await self._listener_connection.close()
+        except Exception:
+            pass
+
+        self._listener_connection = await asyncpg.connect(...)
+        await self._listener_connection.add_listener('settings_change', self._on_notification)
+        logger.info("Listener reconnected successfully")
 
     def _on_notification(self, connection, pid, channel, payload):
         """通知を受け取った時のコールバック"""
