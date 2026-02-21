@@ -491,7 +491,10 @@ class Voice(commands.Cog):
 
         # 辞書適応
         content = await self.apply_dictionary(content, message.guild.id)
-        content = await self.apply_dictionary(content, self.GLOBAL_DICT_ID)
+
+        # グローバル辞書（ID が 0 でない場合のみ適用）
+        if self.GLOBAL_DICT_ID and self.GLOBAL_DICT_ID != 0:
+            content = await self.apply_dictionary(content, self.GLOBAL_DICT_ID)
 
         # ローマ字を仮名読みに変換
         if settings.read_romaji:
