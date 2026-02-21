@@ -170,6 +170,13 @@ class TestSettingsCache:
         assert cache.get_dict(123) == {"new": "ニュー"}
         assert 123 not in cache.pending_dict_reload
 
+    def test_dict_mark_nonexistent_does_nothing(self, cache: SettingsCache):
+        """存在しない辞書へのマークは何もしない"""
+        cache.mark_dict_needs_reload(999)
+
+        # pending_dict_reload には追加されない（辞書が存在しないため）
+        assert 999 not in cache.pending_dict_reload
+
     # ========================================
     # VC接続状態テスト
     # ========================================
@@ -202,6 +209,9 @@ class TestSettingsCache:
         cache.set_boost_count(1, 3)
         cache.set_dict(1, {})
         cache.add_active_guild(1)
+
+        # 存在する辞書に対してマークする
+        cache.set_dict(999, {"temp": "テンプ"})
         cache.mark_dict_needs_reload(999)
 
         stats = cache.stats()
@@ -209,6 +219,17 @@ class TestSettingsCache:
         assert stats["guild_settings"] == 2
         assert stats["user_settings"] == 1
         assert stats["boost_counts"] == 1
-        assert stats["dictionaries_loaded"] == 1
+        assert stats["dictionaries_loaded"] == 2  # 1 と 999
         assert stats["active_voice_guilds"] == 1
         assert stats["pending_dict_reload"] == 1
+
+    def test_stats_empty(self, cache: SettingsCache):
+        """空のキャッシュの統計"""
+        stats = cache.stats()
+
+        assert stats["guild_settings"] == 0
+        assert stats["user_settings"] == 0
+        assert stats["boost_counts"] == 0
+        assert stats["dictionaries_loaded"] == 0
+        assert stats["active_voice_guilds"] == 0
+        assert stats["pending_dict_reload"] == 0
