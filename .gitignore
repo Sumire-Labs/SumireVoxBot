@@ -31,3 +31,7 @@ Thumbs.db
 
 # Docker
 docker-compose.yml
+
+# IDE
+.idea
+.idea/*
