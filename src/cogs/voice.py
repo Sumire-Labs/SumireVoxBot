@@ -69,6 +69,10 @@ class Voice(commands.Cog):
 
     async def apply_dictionary(self, content: str, guild_id: int) -> str:
         """辞書を適用してテキストを変換する"""
+        # guild_id が 0 の場合はスキップ
+        if not guild_id or guild_id == 0:
+            return content
+
         words = await self.bot.db.get_dict(guild_id)
         if words and isinstance(words, dict):
             for word in sorted(words.keys(), key=len, reverse=True):
