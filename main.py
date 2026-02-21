@@ -32,6 +32,7 @@ VOICEVOX_PORT = int(os.getenv("VOICEVOX_PORT", 50021))
 WEB_ENABLED: str = str(os.getenv("WEB_ENABLED", True))
 DEV_GUILD_ID: int = int(os.getenv("DEV_GUILD_ID", 0))
 COMMANDS_SYNC: str = str(os.getenv("COMMANDS_SYNC", True))
+HOMEPAGE_DOMAIN: str = os.getenv("HOMEPAGE_DOMAIN", "sumirevox.com")
 
 COGS: list[str] = [
     "src.cogs.voice",
@@ -146,7 +147,7 @@ class SumireVox(commands.Bot):
 
         # Activity の設定
         if MIN_BOOST_LEVEL == 0:
-            activity = discord.Activity(name="/help | 1台目", type=discord.ActivityType.playing)
+            activity = discord.Activity(name=f"{HOMEPAGE_DOMAIN} | 1台目", type=discord.ActivityType.playing)
         else:
             activity = discord.Activity(name=f"読み上げ専用 | {MIN_BOOST_LEVEL}台目", type=discord.ActivityType.playing)
         await self.change_presence(activity=activity)
