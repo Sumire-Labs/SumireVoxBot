@@ -41,6 +41,11 @@ class ConfigEditModal(discord.ui.Modal):
         settings = await self.db.get_guild_settings(interaction.guild.id)
         old_value = getattr(settings, self.item_key)
 
+        if int(value) > 50:
+            is_boosted = await self.db.is_guild_boosted(interaction.guild.id)
+            if not is_boosted:
+                return await interaction.response.send_message("❌ サーバーがブーストされていません。", ephemeral=True)
+
         try:
             setattr(settings, self.item_key, new_value)
             await self.db.set_guild_settings(interaction.guild.id, settings)
