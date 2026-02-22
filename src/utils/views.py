@@ -197,6 +197,9 @@ class ConfigSearchView(discord.ui.View):
             return None
 
         if item_key == "auto_join":
+            is_boosted = await self.db.is_guild_boosted(interaction.guild.id)
+            if not is_boosted:
+                return await interaction.response.send_message("❌ サーバーがブーストされていません。", ephemeral=True)
             return await interaction.response.send_message(
                 "### 🤖 自動接続の個別設定\n監視するVCと出力先のTCを選択してください。",
                 view=ConfigAutoJoinView(self.db, self.bot, self.message),
