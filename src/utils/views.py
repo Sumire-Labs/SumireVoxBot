@@ -150,6 +150,42 @@ class ConfigAutoJoinView(discord.ui.View):
             ephemeral=True
         )
 
+    @discord.ui.button(label="設定を削除", style=discord.ButtonStyle.danger, emoji="🗑️")
+    async def delete_config(self, interaction: discord.Interaction, button: discord.ui.Button):
+        settings = await self.db.get_guild_settings(interaction.guild.id)
+
+        # 設定が存在しない場合
+        if settings.auto_join_config is None:
+            return await interaction.response.send_message(
+                "❌ このBotの自動接続設定は登録されていません。",
+                ephemeral=True
+            )
+
+        bot_key = str(self.bot.user.id)
+
+        # このBotの設定が存在しない場合
+        if bot_key not in settings.auto_join_config:
+            return await interaction.response.send_message(
+                "❌ このBotの自動接続設定は登録されていません。",
+                ephemeral=True
+            )
+
+        # 設定を削除
+        del settings.auto_join_config[bot_key]
+
+        # 全てのBot設定が空になった場合、auto_joinをFalseに
+        if not settings.auto_join_config:
+            settings.auto_join = False
+
+        await self.db.set_guild_settings(interaction.guild.id, settings)
+
+        await update_config_message(self.bot, interaction, settings, self.original_message)
+
+        return await interaction.response.send_message(
+            f"✅ **{self.bot.user.name}** の自動接続設定を削除しました。",
+            ephemeral=True
+        )
+
 
 # メインの項目選択 View
 class ConfigSearchView(discord.ui.View):
