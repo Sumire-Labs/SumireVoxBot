@@ -58,7 +58,7 @@ class Boost(commands.Cog):
 
             # ブーストを適用
             success = await self.db.activate_guild_boost(guild_id, user_id)
-            logger.debug(f"activate_guild_boost success: {success}")
+            logger.success(f"activate_guild_boost success: {success}")
 
             if success:
                 embed = discord.Embed(
