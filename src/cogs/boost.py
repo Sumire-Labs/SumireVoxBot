@@ -21,7 +21,7 @@ class Boost(commands.Cog):
         guild_id = interaction.guild_id
         user_id = interaction.user.id
 
-        logger.info(f"[DEBUG] /boost activate called by {user_id} for guild {guild_id}")
+        logger.debug(f"/boost activate called by {user_id} for guild {guild_id}")
 
         try:
             # 現在のブースト数を取得
