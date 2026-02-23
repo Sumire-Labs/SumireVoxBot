@@ -91,7 +91,7 @@ class Boost(commands.Cog):
             boost_count = await self.db.get_guild_boost_count(guild_id)
             
             # デバッグログ
-            logger.info(f"[DEBUG] /boost status called for guild_id={guild_id} ({type(guild_id)}). DB count={boost_count}")
+            logger.debug(f"/boost status called for guild_id={guild_id} ({type(guild_id)}). DB count={boost_count}")
             
             embed = discord.Embed(
                 title="💎 サーバーブースト状況",
