@@ -29,7 +29,7 @@ class Boost(commands.Cog):
             bot_instances = await self.db.get_bot_instances()
             max_boosts = len(bot_instances)
 
-            logger.debug(f"[DEBUG] boost_count: {boost_count}, max_boosts: {max_boosts}")
+            logger.debug(f"boost_count: {boost_count}, max_boosts: {max_boosts}")
 
             if boost_count >= max_boosts:
                 await interaction.followup.send(f"このサーバーはすでに最大数({max_boosts})までブーストされています。", ephemeral=True)
@@ -37,7 +37,7 @@ class Boost(commands.Cog):
 
             # スロットに空きがあるか確認
             status = await self.db.get_user_slots_status(user_id)
-            logger.debug(f"[DEBUG] user_slots_status: {status}")
+            logger.debug(f"user_slots_status: {status}")
 
             if status["total"] == 0:
                 await interaction.followup.send(
@@ -58,7 +58,7 @@ class Boost(commands.Cog):
 
             # ブーストを適用
             success = await self.db.activate_guild_boost(guild_id, user_id)
-            logger.debug(f"[DEBUG] activate_guild_boost success: {success}")
+            logger.debug(f"activate_guild_boost success: {success}")
 
             if success:
                 embed = discord.Embed(
