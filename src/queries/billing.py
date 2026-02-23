@@ -1,19 +1,21 @@
 class BillingQueries:
     CREATE_USERS_TABLE = """
-    CREATE TABLE IF NOT EXISTS users (
-      discord_id TEXT PRIMARY KEY,
-      stripe_customer_id TEXT UNIQUE,
-      total_slots INTEGER NOT NULL DEFAULT 0
-    );
-    """
+                         CREATE TABLE IF NOT EXISTS users
+                         (
+                             discord_id         TEXT PRIMARY KEY,
+                             stripe_customer_id TEXT UNIQUE,
+                             total_slots        INTEGER NOT NULL DEFAULT 0
+                         ); \
+                         """
 
     CREATE_BOOSTS_TABLE = """
-    CREATE TABLE IF NOT EXISTS guild_boosts (
-      id SERIAL PRIMARY KEY,
-      guild_id BIGINT NOT NULL,
-      user_id TEXT NOT NULL REFERENCES users(discord_id) ON DELETE CASCADE
-    );
-    """
+                          CREATE TABLE IF NOT EXISTS guild_boosts
+                          (
+                              id       SERIAL PRIMARY KEY,
+                              guild_id BIGINT NOT NULL,
+                              user_id  TEXT   NOT NULL REFERENCES users (discord_id) ON DELETE CASCADE
+                          ); \
+                          """
 
     CREATE_BOOSTS_GUILD_INDEX = "CREATE INDEX IF NOT EXISTS idx_guild_boosts_guild_id ON guild_boosts(guild_id);"
     CREATE_BOOSTS_USER_INDEX = "CREATE INDEX IF NOT EXISTS idx_guild_boosts_user_id ON guild_boosts(user_id);"
@@ -27,12 +29,11 @@ class BillingQueries:
 
     # ユーザーのスロット状況を取得（ブースト数含む）
     GET_USER_SLOTS_STATUS = """
-    SELECT 
-        u.total_slots,
-        (SELECT COUNT(*) FROM guild_boosts WHERE user_id = u.discord_id) as used_slots
-    FROM users u
-    WHERE u.discord_id = $1
-    """
+                            SELECT u.total_slots,
+                                   (SELECT COUNT(*) FROM guild_boosts WHERE user_id = u.discord_id) as used_slots
+                            FROM users u
+                            WHERE u.discord_id = $1 \
+                            """
 
     # 特定のギルドが誰によってブーストされているか
     GET_GUILD_BOOST_USER = "SELECT user_id FROM guild_boosts WHERE guild_id = $1::BIGINT"

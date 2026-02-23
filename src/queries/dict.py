@@ -3,7 +3,7 @@ class DictQueries:
                    CREATE TABLE IF NOT EXISTS dict
                    (
                        guild_id BIGINT,
-                       dict JSONB NOT NULL DEFAULT '{}',
+                       dict     JSONB NOT NULL DEFAULT '{}',
                        PRIMARY KEY (guild_id)
                    )
                    """

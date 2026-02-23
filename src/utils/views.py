@@ -356,7 +356,7 @@ class DictionaryAddModal(discord.ui.Modal):
             # プレミアムチェック (登録数上限)
             is_boosted = await self.bot.db.is_guild_boosted(interaction.guild.id)
             limit = 100 if is_boosted else 10
-            
+
             if len(words_dict) >= limit and word not in words_dict:
                 embed = discord.Embed(
                     title="💎 登録上限エラー",

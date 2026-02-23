@@ -15,6 +15,6 @@ class GuildSettingsQueries:
 
     SET_SETTINGS = """
                    INSERT INTO guild_settings (guild_id, settings)
-                   VALUES ($1, $2) ON CONFLICT (guild_id) DO
-                   UPDATE SET settings = EXCLUDED.settings
+                   VALUES ($1, $2)
+                   ON CONFLICT (guild_id) DO UPDATE SET settings = EXCLUDED.settings
                    """

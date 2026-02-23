@@ -28,7 +28,7 @@ class GuildSettings(BaseModel):
 
     # さん付け
     add_suffix: bool = Field(default=False, description="ユーザー名の後に『さん』を付ける")
-    
+
     # ローマ字読み
     read_romaji: bool = Field(default=False, description="ローマ字を読み上げるか")
 
@@ -40,6 +40,7 @@ class GuildSettings(BaseModel):
 
     # URLを省略
     skip_urls: bool = Field(default=True, description="URLを省略する")
+
 
 class GuildDict(BaseModel):
     # 単語

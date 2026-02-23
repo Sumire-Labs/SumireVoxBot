@@ -25,7 +25,7 @@ class Commands(commands.Cog):
         """招待リンクを表示する"""
         boost_count = await self.bot.db.get_guild_boost_count(interaction.guild_id)
         bot_instances = await self.bot.db.get_bot_instances()
-        
+
         embed = discord.Embed(
             title="🌸 Bot招待・管理",
             description=f"現在のサーバーのブースト数: **{boost_count}**",
@@ -38,15 +38,15 @@ class Commands(commands.Cog):
         # インスタンスのリスト (bot_instances) は id (1, 2, 3...) でソートされている
         # id=1 はメインBotなので、2台目以降は index > 0 (id > 1)
         for i, bi in enumerate(bot_instances):
-            if i == 0: continue # メインBotはスキップ
-            
+            if i == 0: continue  # メインBotはスキップ
+
             # 修正: 2台目(i=1)は2ブースト、3台目(i=2)は3ブースト...
             # つまり boost_count >= i + 1
             required_boosts = i + 1
             if boost_count >= required_boosts:
                 available_bots.append({
                     "id": bi["client_id"],
-                    "label": f"{i+1}台目を招待"
+                    "label": f"{i + 1}台目を招待"
                 })
             elif next_goal is None:
                 next_goal = required_boosts
@@ -64,8 +64,8 @@ class Commands(commands.Cog):
             if next_goal:
                 msg += f"\nあと **{next_goal - boost_count}** ブーストで次のBotが解放されます！"
             elif len(bot_instances) <= 1:
-                 msg += "\n現在、追加のサブBotは用意されていません。"
-            
+                msg += "\n現在、追加のサブBotは用意されていません。"
+
             embed.add_field(name="ℹ️ お知らせ", value=msg)
             await interaction.response.send_message(embed=embed, ephemeral=True)
 

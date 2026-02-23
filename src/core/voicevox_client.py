@@ -9,7 +9,7 @@ class VoicevoxClient:
         host = os.getenv("VOICEVOX_HOST", "127.0.0.1")
         port = os.getenv("VOICEVOX_PORT", "50021")
         self.base_url = f"http://{host}:{port}"
-        self.session = None # type: aiohttp.ClientSession or None
+        self.session = None  # type: aiohttp.ClientSession or None
 
     # create an API session
     async def _get_session(self) -> aiohttp.ClientSession:
@@ -17,7 +17,8 @@ class VoicevoxClient:
             self.session = aiohttp.ClientSession()
         return self.session
 
-    async def generate_sound(self, text: str, speaker_id: int = 0, speed: float = 1.0, pitch: float = 0.0, output_path: str = "output.wav"):
+    async def generate_sound(self, text: str, speaker_id: int = 0, speed: float = 1.0, pitch: float = 0.0,
+                             output_path: str = "output.wav"):
         # 使い回しのセッションを取得
         session = await self._get_session()
 
@@ -53,7 +54,7 @@ class VoicevoxClient:
         async with session.post(f"{self.base_url}/user_dict_word", params=params) as resp:
             if resp.status != 200:
                 raise Exception(f"辞書登録失敗: {resp.status}")
-            return await resp.text() # 登録された単語のUUIDが返る
+            return await resp.text()  # 登録された単語のUUIDが返る
 
     async def get_user_dict(self):
         """エンジン側のユーザー辞書一覧を取得"""

@@ -194,7 +194,8 @@ class Voice(commands.Cog):
         queue = self.get_queue(guild_id)
         guild = self.bot.get_guild(guild_id) or await self.bot.fetch_guild(guild_id)
         vc = guild.voice_client
-        logger.debug(f"[DEBUG] play_next start guild={guild_id}, vc_connected={bool(vc and vc.is_connected())}, queue_size={queue.qsize()}")
+        logger.debug(
+            f"[DEBUG] play_next start guild={guild_id}, vc_connected={bool(vc and vc.is_connected())}, queue_size={queue.qsize()}")
 
         try:
             while not queue.empty():
@@ -225,7 +226,7 @@ class Voice(commands.Cog):
         if audio_task.is_failed:
             logger.warning(f"[{guild_id}] 音声生成が失敗したためスキップ ({audio_task.task_id})")
             return
-        
+
         # 生成ファイルの存在確認
         if not os.path.exists(audio_task.file_path):
             logger.error(f"[{guild_id}] 生成ファイルが見つかりません: {audio_task.file_path}")
@@ -243,7 +244,8 @@ class Voice(commands.Cog):
                 # 自動接続設定があれば再接続を試みるロジック（簡易版）
                 return
 
-            logger.debug(f"[DEBUG] 再生開始: file={audio_task.file_path}, vc_connected={guild.voice_client.is_connected()}")
+            logger.debug(
+                f"[DEBUG] 再生開始: file={audio_task.file_path}, vc_connected={guild.voice_client.is_connected()}")
             source = discord.FFmpegPCMAudio(
                 audio_task.file_path,
                 options="-vn -loglevel quiet",
@@ -333,17 +335,18 @@ class Voice(commands.Cog):
     async def read_message(self, message: discord.Message):
         if message.author.bot:
             return
-        
+
         if not message.guild:
             return
-            
+
         if not message.guild.voice_client:
             return
 
         if message.channel.id != self.read_channels.get(message.guild.id):
             return
 
-        logger.debug(f"[DEBUG] on_message received in {message.guild.name} from {message.author.display_name}: {message.content[:50]}")
+        logger.debug(
+            f"[DEBUG] on_message received in {message.guild.name} from {message.author.display_name}: {message.content[:50]}")
 
         # 「s」または「ｓ」一文字なら読み上げ中断
         if message.content.strip() in ("s", "ｓ"):
@@ -363,16 +366,16 @@ class Voice(commands.Cog):
 
         settings = await self.bot.db.get_guild_settings(message.guild.id)
         is_boosted = await self.bot.db.is_guild_boosted(message.guild.id)
-        
+
         # ブーストされている場合は制限を緩和
         # 無料: 50文字固定, 1ブースト以上: 設定値（最大200文字）
         if is_boosted:
             max_chars = min(settings.max_chars, 200)
         else:
             max_chars = 50
-        
+
         logger.debug(f"[DEBUG] Processing message. is_boosted={is_boosted}, max_chars={max_chars}")
-        
+
         content = message.clean_content
 
         # Discordのタイムスタンプ表現 <t:UNIX:FORMAT> を読み上げ用に変換
@@ -917,7 +920,7 @@ class Voice(commands.Cog):
     async def set_voice(self, interaction: discord.Interaction, speaker: int, speed: float = 1.0, pitch: float = 0.0):
         # ブーストチェック
         is_boosted = await self.bot.db.is_guild_boosted(interaction.guild.id)
-        
+
         # 無料版制限: 速度・ピッチはデフォルト以外不可
         if not is_boosted:
             if speed != 1.0 or pitch != 0.0:
@@ -1031,7 +1034,7 @@ class Voice(commands.Cog):
             char_limit_text = f"📝 `{effective_limit}` 文字 (設定: {settings.max_chars})"
         else:
             char_limit_text = "📝 `50` 文字 (無料版制限)"
-            
+
         embed.add_field(name="文字数制限", value=char_limit_text, inline=True)
         embed.add_field(name="さん付け", value="✅ 有効" if settings.add_suffix else "❌ 無効", inline=True)
         embed.add_field(name="ローマ字読み", value="✅ 有効" if settings.read_romaji else "❌ 無効", inline=True)
