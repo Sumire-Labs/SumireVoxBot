@@ -107,7 +107,7 @@ class Voice(commands.Cog):
                 logger.error(f"[{guild_id}] ユーザー設定の取得に失敗しました (user_id: {audio_task.author_id}): {e}")
                 s = {"speaker": 1, "speed": 1.0, "pitch": 0.0}
 
-            is_boosted = self.bot.db.is_guild_boosted(guild_id)
+            is_boosted = await self.bot.db.is_guild_boosted(guild_id)
             if not is_boosted:
                 s["speed"] = 1.0
                 s["pitch"] = 0.0
