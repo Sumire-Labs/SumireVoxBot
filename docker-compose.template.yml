@@ -1,11 +1,12 @@
 version: "3.8"
+name: sumirevox
 
 # 共通設定の定義
 x-bot-template: &bot-template
   build:
     context: .
   volumes:
-    - ./app/bot:/app
+    - .:/app
   depends_on:
     db:
       condition: service_healthy
@@ -16,29 +17,57 @@ x-bot-template: &bot-template
 services:
   bot1:
     <<: *bot-template
-    container_name: sumire_vox_bot_1
+    container_name: sumirevox_bot_1
     env_file:
+      - ./.env
       - ./.env.bot1
-    ports:
-      - "8080:8080"
+    networks:
+      - sumirevox_network
+
+  bot2:
+    <<: *bot-template
+    container_name: sumirevox_bot_2
+    env_file:
+      - ./.env
+      - ./.env.bot2
+    networks:
+      - sumirevox_network
+
+  bot3:
+    <<: *bot-template
+    container_name: sumirevox_bot_3
+    env_file:
+      - ./.env
+      - ./.env.bot3
+    networks:
+      - sumirevox_network
 
   voicevox_engine:
-    image: voicevox/voicevox_engine:cpu-ubuntu20.04-latest
+    image: voicevox/voicevox_engine:nvidia-ubuntu20.04-latest
     container_name: voicevox_engine
     ports:
       - "50021:50021"
+    tty: true
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: 1
+              capabilities:
+                - gpu
     restart: unless-stopped
     volumes:
       - ./voicevox_config:/root/.local/share/voicevox_engine
     networks:
-      - sumire_vox_network
+      - sumirevox_network
 
   db:
     image: postgres:15
-    container_name: sumire_vox_db
+    container_name: sumirevox_db
     restart: always
     env_file:
-        - ./.env.common
+      - ./.env
     ports:
       - "5432:5432"
     volumes:
@@ -49,8 +78,8 @@ services:
       timeout: 5s
       retries: 30
     networks:
-      - sumire_vox_network
+      - sumirevox_network
 
 networks:
-  sumire_vox_network:
+  sumirevox_network:
     driver: bridge
