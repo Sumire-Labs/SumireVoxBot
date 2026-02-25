@@ -346,7 +346,7 @@ class Voice(commands.Cog):
             return
 
         logger.debug(
-            f"[DEBUG] on_message received in {message.guild.name} from {message.author.display_name}: {message.content[:50]}")
+            f"on_message received in {message.guild.name} from {message.author.display_name}: {message.content[:50]}")
 
         # 「s」または「ｓ」一文字なら読み上げ中断
         if message.content.strip() in ("s", "ｓ"):
@@ -361,7 +361,7 @@ class Voice(commands.Cog):
         # インスタンスのアクティブ判定
         is_active = await self.bot.db.is_instance_active(message.guild.id)
         if not is_active:
-            logger.debug(f"[DEBUG] Instance is NOT active for guild {message.guild.id}. Skipping message.")
+            logger.debug(f"Instance is NOT active for guild {message.guild.id}. Skipping message.")
             return
 
         settings = await self.bot.db.get_guild_settings(message.guild.id)
@@ -374,7 +374,7 @@ class Voice(commands.Cog):
         else:
             max_chars = 50
 
-        logger.debug(f"[DEBUG] Processing message. is_boosted={is_boosted}, max_chars={max_chars}")
+        logger.debug(f"Processing message. is_boosted={is_boosted}, max_chars={max_chars}")
 
         content = message.clean_content
 
@@ -510,7 +510,8 @@ class Voice(commands.Cog):
 
         # 長文対策
         if len(content) > max_chars:
-            content = content[:max_chars] + "、以下略"
+            content = content[:max_chars]
+            content = content + "、以下略"
 
         # 添付ファイルのチェック
         if settings.read_attachments:
