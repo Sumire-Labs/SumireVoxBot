@@ -1,3 +1,5 @@
+# src/cogs/voice.py
+
 import discord
 import emoji
 from discord import app_commands
@@ -23,7 +25,8 @@ def is_katakana(text: str) -> bool:
 
 
 def format_rows(rows):
-    if not rows: return "登録なし"
+    if not rows:
+        return "登録なし"
     try:
         if isinstance(rows, dict):
             return "\n".join([f"・`{word}` → `{reading}`" for word, reading in rows.items()])
@@ -50,16 +53,198 @@ class Voice(commands.Cog):
     def __init__(self, bot):
         self.bot = bot
         self.temp_dir = "temp"
-        self.queues: dict[int, asyncio.Queue[AudioTask]] = {}  # AudioTaskのキュー
+        self.queues: dict[int, asyncio.Queue[AudioTask]] = {}
         self.is_processing = {}
         self.read_channels = {}
 
         load_dotenv()
-        self.GLOBAL_DICT_ID = int(os.getenv("GLOBAL_DICT_ID"))
+        self.GLOBAL_DICT_ID = int(os.getenv("GLOBAL_DICT_ID", "0"))
 
         if not os.path.exists(self.temp_dir):
             os.makedirs(self.temp_dir)
             logger.info(f"一時ディレクトリを作成しました: {self.temp_dir}")
+
+    # ========================================
+    # 起動時のセッション復元
+    # ========================================
+
+    @commands.Cog.listener()
+    async def on_ready(self):
+        """Bot起動時にDBからセッションを復元する"""
+        # 重複呼び出し防止
+        if hasattr(self, "_session_restore_done"):
+            return
+        self._session_restore_done = True
+
+        # Botが完全に準備できるまで少し待機
+        await asyncio.sleep(2)
+
+        await self._restore_voice_sessions()
+
+    async def _restore_voice_sessions(self):
+        """DBに保存されたセッションを復元してVCに再接続する"""
+        logger.info("Restoring voice sessions from database...")
+
+        try:
+            sessions = await self.bot.db.get_voice_sessions_by_bot(self.bot.user.id)
+        except Exception as e:
+            logger.error(f"Failed to fetch voice sessions from DB: {e}")
+            return
+
+        if not sessions:
+            logger.info("No voice sessions to restore.")
+            return
+
+        logger.info(f"Found {len(sessions)} session(s) to restore.")
+
+        restored_count = 0
+        failed_count = 0
+
+        for session in sessions:
+            guild_id = session["guild_id"]
+            voice_channel_id = session["voice_channel_id"]
+            text_channel_id = session["text_channel_id"]
+
+            result = await self._try_restore_session(guild_id, voice_channel_id, text_channel_id)
+
+            if result:
+                restored_count += 1
+            else:
+                failed_count += 1
+                # 復元に失敗したセッションはDBから削除（バックグラウンド）
+                asyncio.create_task(self._delete_session_background(guild_id))
+
+        logger.success(
+            f"Voice session restoration complete: "
+            f"{restored_count} restored, {failed_count} skipped/failed"
+        )
+
+    async def _delete_session_background(self, guild_id: int):
+        """バックグラウンドでセッションを削除"""
+        try:
+            await self.bot.db.delete_voice_session(guild_id)
+        except Exception as e:
+            logger.error(f"[{guild_id}] Failed to delete voice session: {e}")
+
+    async def _try_restore_session(
+        self,
+        guild_id: int,
+        voice_channel_id: int,
+        text_channel_id: int
+    ) -> bool:
+        """
+        単一のセッションを復元する
+
+        Returns:
+            bool: 復元成功ならTrue、失敗/スキップならFalse
+        """
+        try:
+            # ギルドの取得
+            guild = self.bot.get_guild(guild_id)
+            if not guild:
+                logger.warning(f"[{guild_id}] Restore skipped: Guild not found")
+                return False
+
+            # ボイスチャンネルの取得
+            voice_channel = guild.get_channel(voice_channel_id)
+            if not voice_channel:
+                logger.warning(f"[{guild_id}] Restore skipped: Voice channel {voice_channel_id} not found")
+                return False
+
+            # ボイスチャンネルかどうか確認
+            if not isinstance(voice_channel, (discord.VoiceChannel, discord.StageChannel)):
+                logger.warning(f"[{guild_id}] Restore skipped: Channel {voice_channel_id} is not a voice channel")
+                return False
+
+            # テキストチャンネルの取得
+            text_channel = guild.get_channel(text_channel_id)
+            if not text_channel:
+                logger.warning(f"[{guild_id}] Restore skipped: Text channel {text_channel_id} not found")
+                return False
+
+            # テキストチャンネルかどうか確認
+            if not isinstance(text_channel, discord.TextChannel):
+                logger.warning(f"[{guild_id}] Restore skipped: Channel {text_channel_id} is not a text channel")
+                return False
+
+            # ボイスチャンネルに人間がいるか確認
+            human_members = [m for m in voice_channel.members if not m.bot]
+            if not human_members:
+                logger.info(f"[{guild_id}] Restore skipped: No human members in voice channel")
+                return False
+
+            # 既に接続中か確認
+            if guild.voice_client and guild.voice_client.is_connected():
+                logger.info(f"[{guild_id}] Restore skipped: Already connected to a voice channel")
+                # read_channelsだけ復元
+                self.read_channels[guild_id] = text_channel_id
+                await self.bot.db.load_guild_dict(guild_id)
+                return True
+
+            # 他のSumireVox系Botがいないか確認
+            other_bot = discord.utils.find(
+                lambda m: m.bot and m.id != self.bot.user.id and ("Sumire" in m.name or "Vox" in m.name),
+                voice_channel.members
+            )
+            if other_bot:
+                logger.info(
+                    f"[{guild_id}] Restore skipped: Another SumireVox bot ({other_bot.display_name}) "
+                    f"is already in the channel"
+                )
+                return False
+
+            # 接続権限の確認
+            permissions = voice_channel.permissions_for(guild.me)
+            if not permissions.connect or not permissions.speak:
+                logger.warning(f"[{guild_id}] Restore skipped: Missing permissions to connect/speak")
+                return False
+
+            # 接続を試行
+            try:
+                await voice_channel.connect(timeout=10.0)
+            except asyncio.TimeoutError:
+                logger.warning(f"[{guild_id}] Restore failed: Connection timeout")
+                return False
+            except discord.errors.ClientException as e:
+                logger.warning(f"[{guild_id}] Restore failed: {e}")
+                return False
+
+            # 変数に保存
+            self.read_channels[guild_id] = text_channel_id
+
+            # 辞書をロード
+            await self.bot.db.load_guild_dict(guild_id)
+
+            logger.success(
+                f"[{guild_id}] Session restored: "
+                f"VC={voice_channel.name}, TC={text_channel.name}"
+            )
+
+            # 復元通知を送信（オプション）
+            try:
+                embed = discord.Embed(
+                    title="🔄 再接続しました",
+                    description=(
+                        f"Botの再起動により **{voice_channel.name}** に再接続しました。\n"
+                        f"読み上げを再開します。"
+                    ),
+                    color=discord.Color.blue()
+                )
+                await text_channel.send(embed=embed)
+            except discord.errors.Forbidden:
+                logger.warning(f"[{guild_id}] Could not send restore notification (no permission)")
+            except Exception as e:
+                logger.warning(f"[{guild_id}] Could not send restore notification: {e}")
+
+            return True
+
+        except Exception as e:
+            logger.error(f"[{guild_id}] Restore failed with unexpected error: {e}")
+            return False
+
+    # ========================================
+    # キュー管理
+    # ========================================
 
     def get_queue(self, guild_id: int) -> asyncio.Queue[AudioTask]:
         if guild_id not in self.queues:
@@ -69,7 +254,6 @@ class Voice(commands.Cog):
 
     async def apply_dictionary(self, content: str, guild_id: int) -> str:
         """辞書を適用してテキストを変換する"""
-        # guild_id が 0 の場合はスキップ
         if not guild_id or guild_id == 0:
             return content
 
@@ -96,6 +280,10 @@ class Voice(commands.Cog):
             if not interaction.response.is_done():
                 await interaction.response.send_message(embed=embed, ephemeral=True)
             return None
+
+    # ========================================
+    # 音声生成・再生
+    # ========================================
 
     async def _generate_audio(self, audio_task: AudioTask, guild_id: int):
         """音声ファイルを生成する（バックグラウンドタスク）"""
@@ -241,7 +429,6 @@ class Voice(commands.Cog):
         try:
             if not guild.voice_client or not guild.voice_client.is_connected():
                 logger.error(f"[{guild_id}] VC切断を検知したため、再接続を試みます...")
-                # 自動接続設定があれば再接続を試みるロジック（簡易版）
                 return
 
             logger.debug(
@@ -274,7 +461,6 @@ class Voice(commands.Cog):
 
         except discord.errors.ClientException as e:
             logger.error(f"[{guild_id}] Discord再生エラー (ClientException): {e}")
-            # VoiceClientの状態が異常な場合、リセットを検討
             if guild.voice_client and not guild.voice_client.is_playing():
                 try:
                     await guild.voice_client.disconnect(force=True)
@@ -287,17 +473,20 @@ class Voice(commands.Cog):
         """音声ファイルを削除する"""
         try:
             if os.path.exists(audio_task.file_path):
-                await asyncio.sleep(0.5)  # ファイルハンドルが確実に閉じられるまで待機
+                await asyncio.sleep(0.5)
                 os.remove(audio_task.file_path)
                 logger.debug(f"[{guild_id}] 一時ファイルを削除しました: {audio_task.file_path}")
         except Exception as e:
             logger.warning(f"[{guild_id}] 一時ファイルの削除に失敗しました: {e}")
 
+    # ========================================
+    # イベントリスナー
+    # ========================================
+
     @commands.Cog.listener(name="on_voice_state_update")
     async def on_vc_notification(self, member: discord.Member, before: discord.VoiceState, after: discord.VoiceState):
         """ユーザーの入退出を検知して読み上げる"""
         try:
-            # Bot自身や、BotがVCに参加していない場合は無視
             if member.bot or not member.guild.voice_client:
                 return
 
@@ -309,16 +498,13 @@ class Voice(commands.Cog):
                 logger.error(f"[{member.guild.id}] サーバー設定の取得に失敗しました: {e}")
                 return
 
-            # 設定が無効なら終了
             if not settings.read_vc_status:
                 return
 
             content = None
-            # 入室: 以前のチャンネルがBotのVCではなく、現在のチャンネルがBotのVCである場合
             if before.channel != bot_vc and after.channel == bot_vc:
                 suffix = "さん" if settings.add_suffix else ""
                 content = f"{member.display_name}{suffix}が入室しました"
-            # 退出: 以前のチャンネルがBotのVCで、現在のチャンネルがBotのVCではなくなった場合
             elif before.channel == bot_vc and after.channel != bot_vc:
                 suffix = "さん" if settings.add_suffix else ""
                 content = f"{member.display_name}{suffix}が退室しました"
@@ -367,8 +553,6 @@ class Voice(commands.Cog):
         settings = await self.bot.db.get_guild_settings(message.guild.id)
         is_boosted = await self.bot.db.is_guild_boosted(message.guild.id)
 
-        # ブーストされている場合は制限を緩和
-        # 無料: 50文字固定, 1ブースト以上: 設定値（最大200文字）
         if is_boosted:
             max_chars = min(settings.max_chars, 200)
         else:
@@ -378,11 +562,7 @@ class Voice(commands.Cog):
 
         content = message.clean_content
 
-        # Discordのタイムスタンプ表現 <t:UNIX:FORMAT> を読み上げ用に変換
-        # 例:
-        #   <t:1700000000:R> -> 「3分前」
-        #   <t:1700000000:F> -> 「2026年2月11日23時23分」
-        #   <t:1700000000:S> -> 「2026年2月11日23時23分33秒」（非標準/環境依存のため独自対応）
+        # Discordのタイムスタンプ表現を読み上げ用に変換
         def _format_discord_timestamp_for_tts(match: re.Match) -> str:
             try:
                 unix = int(match.group("unix"))
@@ -422,42 +602,34 @@ class Voice(commands.Cog):
             if fmt == "R":
                 return _relative_jp(dt, now)
 
-            # ローカル時刻で読み上げ（自然なため）
             local_dt = dt.astimezone()
 
-            if fmt == "t":  # 16:20
+            if fmt == "t":
                 return f"{local_dt.hour}時{local_dt.minute}分"
-            if fmt == "T":  # 16:20:30
+            if fmt == "T":
                 return f"{local_dt.hour}時{local_dt.minute}分{local_dt.second}秒"
-            if fmt == "d":  # 日付のみ
+            if fmt == "d":
                 return f"{local_dt.year}年{local_dt.month}月{local_dt.day}日"
-            if fmt == "D":  # 日付のみ（表記違いだが読み上げは同じに寄せる）
+            if fmt == "D":
                 return f"{local_dt.year}年{local_dt.month}月{local_dt.day}日"
-            if fmt == "f":  # 日付+時分
+            if fmt == "f":
                 return f"{local_dt.year}年{local_dt.month}月{local_dt.day}日{local_dt.hour}時{local_dt.minute}分"
-            if fmt == "F":  # 日付+時分（曜日は省略して読み上げを簡潔に）
+            if fmt == "F":
                 return f"{local_dt.year}年{local_dt.month}月{local_dt.day}日{local_dt.hour}時{local_dt.minute}分"
-
-            # 独自: :S を「日付+時分秒」として読む（ユーザー要望対応）
             if fmt == "S":
                 return (
                     f"{local_dt.year}年{local_dt.month}月{local_dt.day}日"
                     f"{local_dt.hour}時{local_dt.minute}分{local_dt.second}秒"
                 )
 
-            # 不明フォーマットはデフォルト扱い
             return f"{local_dt.year}年{local_dt.month}月{local_dt.day}日{local_dt.hour}時{local_dt.minute}分"
 
-        # <t:1234567890:R> / <t:1234567890> どちらも対応
-        # :S も含め、1文字フォーマットは幅広く拾う（tTdDfFR + S）
         content = re.sub(
             r"<t:(?P<unix>\d+)(?::(?P<fmt>[A-Za-z]))?>",
             _format_discord_timestamp_for_tts,
             content
         )
 
-        # Discordクライアント側で既に「2026/02/11 23:23:33」のような文字列に展開される環境向け
-        # それ自体を日本語の読み上げに変換する（スラッシュ/コロン読み上げ事故対策）
         def _format_rendered_datetime_for_tts(match: re.Match) -> str:
             y = int(match.group("y"))
             mo = int(match.group("mo"))
@@ -500,7 +672,7 @@ class Voice(commands.Cog):
         # 辞書適応
         content = await self.apply_dictionary(content, message.guild.id)
 
-        # グローバル辞書（ID が 0 でない場合のみ適用）
+        # グローバル辞書
         if self.GLOBAL_DICT_ID and self.GLOBAL_DICT_ID != 0:
             content = await self.apply_dictionary(content, self.GLOBAL_DICT_ID)
 
@@ -529,9 +701,9 @@ class Voice(commands.Cog):
 
         def _is_bot_disconnect() -> bool:
             return (
-                    member.id == self.bot.user.id
-                    and before.channel is not None
-                    and after.channel is None
+                member.id == self.bot.user.id
+                and before.channel is not None
+                and after.channel is None
             )
 
         async def _cancel_generation_task(audio_task: AudioTask, guild_id: int) -> None:
@@ -609,13 +781,14 @@ class Voice(commands.Cog):
             # 変数から削除
             self.read_channels.pop(guild_id, None)
 
-            # データベースから削除
-            await self.bot.db.delete_voice_session(guild_id)
-
             # 辞書をアンロード
-            self.bot.db.unload_guild_dict(guild_id)
+            await self.bot.db.unload_guild_dict(guild_id)
 
+            # キューのクリーンアップ
             await _cleanup_queue(guild_id)
+
+            # DBからセッションを削除（バックグラウンド）
+            asyncio.create_task(self._delete_session_background(guild_id))
 
             logger.warning(f"[{guild_id}] VC切断を検知したため、キューをクリアしました。")
 
@@ -638,7 +811,6 @@ class Voice(commands.Cog):
     async def on_member_remove(self, member: discord.Member):
         """ブーストしたユーザー自身がサーバーを抜けた際にブーストを解除する"""
         try:
-            # そのサーバーのブースターが抜けたユーザーか確認
             booster_id = await self.bot.db.get_guild_booster(member.guild.id)
             if booster_id == str(member.id):
                 await self.bot.db.deactivate_guild_boost(member.guild.id, member.id)
@@ -652,12 +824,10 @@ class Voice(commands.Cog):
         if member.bot:
             return
 
-        # 誰かがチャンネルに参加したときのみ判定
         if before.channel == after.channel or after.channel is None:
             return
 
         try:
-            # プレミアムチェック
             is_boosted = await self.bot.db.is_guild_boosted(member.guild.id)
             if not is_boosted:
                 logger.debug(f"[{member.guild.id}] プレミアム未加入のため、自動接続をスキップしました。")
@@ -668,11 +838,9 @@ class Voice(commands.Cog):
             logger.error(f"[{member.guild.id}] 自動接続用の設定取得に失敗: {e}")
             return
 
-        # 全体設定が無効なら何もしない
         if not settings.auto_join:
             return
 
-        # このBot用の設定があるか確認
         bot_key = str(self.bot.user.id)
         if bot_key not in settings.auto_join_config:
             return
@@ -681,32 +849,33 @@ class Voice(commands.Cog):
         target_vc_id = config.get("voice")
         target_tc_id = config.get("text")
 
-        # 参加したチャンネルが指定の監視VCであるか確認
         if after.channel.id == target_vc_id:
-            # すでにどこかのVCに接続している場合はスキップ
             if member.guild.voice_client:
                 return
 
             try:
+                # 接続（優先）
                 await after.channel.connect()
 
-                # 変数に保存
+                # 変数に保存（優先）
                 self.read_channels[member.guild.id] = target_tc_id
-
-                # データベースに保存
-                await self.bot.db.save_voice_session(
-                    guild_id=member.guild.id,
-                    voice_channel_id=after.channel.id,
-                    text_channel_id=target_tc_id,
-                    bot_id=self.bot.user.id
-                )
-
-                # 辞書をロード
-                await self.bot.db.load_guild_dict(member.guild.id)
 
                 logger.success(f"[{member.guild.id}] 自動接続成功: {after.channel.name}")
 
-                # 通知メッセージ（任意）
+                # 辞書をロード（バックグラウンド）
+                asyncio.create_task(self.bot.db.load_guild_dict(member.guild.id))
+
+                # DBへの保存（バックグラウンド）
+                asyncio.create_task(
+                    self.bot.db.save_voice_session(
+                        guild_id=member.guild.id,
+                        voice_channel_id=after.channel.id,
+                        text_channel_id=target_tc_id,
+                        bot_id=self.bot.user.id
+                    )
+                )
+
+                # 通知メッセージ
                 tc = member.guild.get_channel(target_tc_id)
                 if tc:
                     embed = discord.Embed(
@@ -724,7 +893,6 @@ class Voice(commands.Cog):
         if before.channel is None or before.channel == after.channel:
             return
 
-        # Bot自身が接続しているギルドの音声クライアントを取得
         voice_client = member.guild.voice_client
         if not voice_client:
             return
@@ -736,27 +904,30 @@ class Voice(commands.Cog):
 
         await asyncio.sleep(AUTO_LEAVE_INTERVAL)
 
-        # Bot以外のメンバー（Bot: False）のリストを取得
         non_bot_members = [m for m in target_channel.members if not m.bot]
 
-        # Bot以外がいなければ切断
         if len(non_bot_members) == 0:
-            logger.info(f"[{member.guild.id}] VC({target_channel.name})にユーザーがいなくなったため自動切断します。")
+            guild_id = member.guild.id
+            logger.info(f"[{guild_id}] VC({target_channel.name})にユーザーがいなくなったため自動切断します。")
 
-            # 変数から削除
-            self.read_channels.pop(member.guild.id, None)
+            # 変数から削除（優先）
+            self.read_channels.pop(guild_id, None)
 
-            # データベースから削除
-            await self.bot.db.delete_voice_session(member.guild.id)
-
-            # 辞書をアンロード
-            self.bot.db.unload_guild_dict(member.guild.id)
-
+            # 切断（優先）
             await voice_client.disconnect(force=True)
+
+            # 辞書をアンロード（バックグラウンド）
+            asyncio.create_task(self.bot.db.unload_guild_dict(guild_id))
+
+            # DBからセッションを削除（バックグラウンド）
+            asyncio.create_task(self._delete_session_background(guild_id))
+
+    # ========================================
+    # コマンド
+    # ========================================
 
     @app_commands.command(name="join", description="ボイスチャンネルに接続し、このチャンネルを読み上げます")
     async def join(self, interaction: discord.Interaction):
-        # ユーザーがボイスチャンネルに接続しているか確認
         if not interaction.user.voice:
             embed = discord.Embed(
                 title="❌ 接続エラー",
@@ -767,7 +938,6 @@ class Voice(commands.Cog):
 
         channel = interaction.user.voice.channel
 
-        # 既に自分が接続しているか確認
         if interaction.guild.voice_client:
             embed = discord.Embed(
                 title="⚠️ 既に接続しています",
@@ -776,7 +946,6 @@ class Voice(commands.Cog):
             )
             return await interaction.response.send_message(embed=embed, ephemeral=True)
 
-        # 重複チェック: 同じチャンネルに他のBot（SumireVoxシリーズ）がいないか
         other_bot = discord.utils.find(
             lambda m: m.bot and m.id != self.bot.user.id and ("Sumire" in m.name or "Vox" in m.name),
             channel.members
@@ -790,30 +959,34 @@ class Voice(commands.Cog):
             return await interaction.response.send_message(embed=embed, ephemeral=True)
 
         try:
+            # 接続（優先）
             await channel.connect()
 
-            # 変数に保存
+            # 変数に保存（優先）
             self.read_channels[interaction.guild.id] = interaction.channel.id
 
-            # データベースに保存
-            await self.bot.db.save_voice_session(
-                guild_id=interaction.guild.id,
-                voice_channel_id=channel.id,
-                text_channel_id=interaction.channel.id,
-                bot_id=self.bot.user.id
-            )
-
-            # 辞書をロード
-            await self.bot.db.load_guild_dict(interaction.guild.id)
-
-            logger.success(f"[{interaction.guild.id}] {channel.name} に接続しました。")
-
+            # レスポンスを即座に返す（優先）
             embed = discord.Embed(
                 title="✅ 接続しました",
                 description=f"**{channel.name}** に接続しました。\nこのチャンネルのチャットを読み上げます。",
                 color=discord.Color.green()
             )
             await interaction.response.send_message(embed=embed)
+
+            logger.success(f"[{interaction.guild.id}] {channel.name} に接続しました。")
+
+            # 辞書をロード（バックグラウンド）
+            asyncio.create_task(self.bot.db.load_guild_dict(interaction.guild.id))
+
+            # DBへの保存（バックグラウンド・遅延許容）
+            asyncio.create_task(
+                self.bot.db.save_voice_session(
+                    guild_id=interaction.guild.id,
+                    voice_channel_id=channel.id,
+                    text_channel_id=interaction.channel.id,
+                    bot_id=self.bot.user.id
+                )
+            )
 
         except discord.errors.ClientException as e:
             logger.error(f"[{interaction.guild.id}] VC接続エラー (ClientException): {e}")
@@ -855,26 +1028,33 @@ class Voice(commands.Cog):
     async def leave(self, interaction: discord.Interaction):
         try:
             if interaction.guild.voice_client:
-                # 変数から削除
-                self.read_channels.pop(interaction.guild.id, None)
+                guild_id = interaction.guild.id
 
-                # データベースから削除
-                await self.bot.db.delete_voice_session(interaction.guild.id)
+                # 変数から削除（優先）
+                self.read_channels.pop(guild_id, None)
 
-                # 辞書をアンロード
-                self.bot.db.unload_guild_dict(interaction.guild.id)
-
+                # 切断（優先）
                 try:
                     await interaction.guild.voice_client.disconnect(force=True)
-                    logger.info(f"[{interaction.guild.id}] VCから切断しました。")
+
+                    # レスポンスを即座に返す（優先）
                     embed = discord.Embed(
                         title="👋 切断しました",
                         description="ボイスチャンネルから切断しました。",
                         color=discord.Color.blue()
                     )
                     await interaction.response.send_message(embed=embed)
+
+                    logger.info(f"[{guild_id}] VCから切断しました。")
+
+                    # 辞書をアンロード（バックグラウンド）
+                    asyncio.create_task(self.bot.db.unload_guild_dict(guild_id))
+
+                    # DBからセッションを削除（バックグラウンド・遅延許容）
+                    asyncio.create_task(self._delete_session_background(guild_id))
+
                 except discord.errors.HTTPException as e:
-                    logger.error(f"[{interaction.guild.id}] VC切断中にHTTPエラーが発生しました: {e}")
+                    logger.error(f"[{guild_id}] VC切断中にHTTPエラーが発生しました: {e}")
                     embed = discord.Embed(
                         title="❌ 切断エラー",
                         description="切断中に通信エラーが発生しました。\nBotは既に切断されている可能性があります。",
@@ -882,7 +1062,7 @@ class Voice(commands.Cog):
                     )
                     await interaction.response.send_message(embed=embed, ephemeral=True)
                 except Exception as e:
-                    logger.error(f"[{interaction.guild.id}] VC切断中に予期しないエラーが発生しました: {e}")
+                    logger.error(f"[{guild_id}] VC切断中に予期しないエラーが発生しました: {e}")
                     embed = discord.Embed(
                         title="❌ 切断エラー",
                         description="切断中にエラーが発生しました。\nしばらく時間をおいてから再度お試しください。",
@@ -908,8 +1088,8 @@ class Voice(commands.Cog):
                     await interaction.followup.send(embed=embed, ephemeral=True)
                 else:
                     await interaction.response.send_message(embed=embed, ephemeral=True)
-            except Exception as e:
-                logger.error(f"[{interaction.guild.id}] エラーが発生しました: {e}")
+            except Exception as e2:
+                logger.error(f"[{interaction.guild.id}] エラーが発生しました: {e2}")
                 try:
                     await interaction.followup.send("エラーが発生しました。")
                 except discord.HTTPException:
@@ -918,176 +1098,189 @@ class Voice(commands.Cog):
     @app_commands.command(name="set_voice", description="自分の声をカスタマイズします")
     @app_commands.choices(speaker=[
         app_commands.Choice(name="四国めたん (ノーマル)", value=2),
-        app_commands.Choice(name="四_国めたん (あまあま)", value=0),
+        app_commands.Choice(name="四国めたん (あまあま)", value=0),
+        app_commands.Choice(name="四国めたん (ツンツン)", value=6),
+        app_commands.Choice(name="四国めたん (セクシー)", value=4),
         app_commands.Choice(name="ずんだもん (ノーマル)", value=3),
         app_commands.Choice(name="ずんだもん (あまあま)", value=1),
+        app_commands.Choice(name="ずんだもん (ツンツン)", value=7),
+        app_commands.Choice(name="ずんだもん (セクシー)", value=5),
         app_commands.Choice(name="春日部つむぎ", value=8),
         app_commands.Choice(name="雨晴はう", value=10),
         app_commands.Choice(name="波音リツ", value=9),
-        app_commands.Choice(name="玄野武宏", value=11),
-        app_commands.Choice(name="白上虎太郎", value=12),
+        app_commands.Choice(name="玄野武宏 (ノーマル)", value=11),
+        app_commands.Choice(name="玄野武宏 (喜び)", value=39),
+        app_commands.Choice(name="玄野武宏 (ツンギレ)", value=40),
+        app_commands.Choice(name="玄野武宏 (悲しみ)", value=41),
+        app_commands.Choice(name="白上虎太郎 (ふつう)", value=12),
+        app_commands.Choice(name="白上虎太郎 (わーい)", value=32),
+        app_commands.Choice(name="白上虎太郎 (びくびく)", value=33),
+        app_commands.Choice(name="白上虎太郎 (おこ)", value=34),
+        app_commands.Choice(name="白上虎太郎 (びえーん)", value=35),
         app_commands.Choice(name="青山龍星", value=13),
         app_commands.Choice(name="冥鳴ひまり", value=14),
+        app_commands.Choice(name="九州そら (ノーマル)", value=16),
         app_commands.Choice(name="九州そら (あまあま)", value=15),
-        app_commands.Choice(name="もち子さん", value=20),
-        app_commands.Choice(name="剣崎雌雄", value=21),
-        app_commands.Choice(name="WhiteCUL", value=23),
-        app_commands.Choice(name="後鬼", value=27),
-        app_commands.Choice(name="No.7", value=29),
-        app_commands.Choice(name="ちび式じい", value=42),
-        app_commands.Choice(name="櫻歌ミコ", value=43),
-        app_commands.Choice(name="小夜/SAYO", value=46),
-        app_commands.Choice(name="ナースロボ＿タイプＴ", value=47),
-        app_commands.Choice(name="聖騎士紅桜", value=50),
-        app_commands.Choice(name="雀松朱司", value=52),
-        app_commands.Choice(name="中国うさぎ", value=61),
-        app_commands.Choice(name="春歌ナナ", value=54),
     ])
-    @app_commands.rename(speaker="キャラクター", speed="スピード", pitch="ピッチ")
     @app_commands.describe(
-        speaker="自分の声のキャラクターを変更できます",
-        speed="自分の声のスピードを変更できます (デフォルトは1.0)",
-        pitch="自分の声のピッチを変更できます (デフォルトは0.0)"
+        speaker="話者を選択してください",
+        speed="話速（0.5〜2.0）",
+        pitch="音高（-0.15〜0.15）"
     )
-    async def set_voice(self, interaction: discord.Interaction, speaker: int, speed: float = 1.0, pitch: float = 0.0):
-        # ブーストチェック
-        is_boosted = await self.bot.db.is_guild_boosted(interaction.guild.id)
-
-        # 無料版制限: 速度・ピッチはデフォルト以外不可
-        if not is_boosted:
-            if speed != 1.0 or pitch != 0.0:
-                embed = discord.Embed(
-                    title="💎 プレミアム機能",
-                    description="読み上げ速度とピッチの変更は**プレミアムプラン（1ブースト以上）**限定機能です。\n"
-                                "現在はキャラクターの変更のみご利用いただけます。",
-                    color=discord.Color.gold()
-                )
-                return await interaction.response.send_message(embed=embed, ephemeral=True)
-
-        # バリデーション
-        speed = max(0.5, min(2.0, speed))
-        pitch = max(-0.15, min(0.15, pitch))
-
-        # DBに保存
-        try:
-            await self.bot.db.set_user_setting(interaction.user.id, speaker, speed, pitch)
-        except Exception as e:
-            logger.error(f"音声設定の保存に失敗しました (user_id: {interaction.user.id}): {e}")
+    async def set_voice(
+        self,
+        interaction: discord.Interaction,
+        speaker: app_commands.Choice[int],
+        speed: float = 1.0,
+        pitch: float = 0.0
+    ):
+        # 値の範囲チェック
+        if not (0.5 <= speed <= 2.0):
             embed = discord.Embed(
-                title="❌ 保存エラー",
-                description="音声設定の保存中にエラーが発生しました。\nしばらく時間をおいてから再度お試しください。",
+                title="❌ 無効な値",
+                description="話速は 0.5〜2.0 の範囲で指定してください。",
                 color=discord.Color.red()
             )
             return await interaction.response.send_message(embed=embed, ephemeral=True)
 
-        embed = discord.Embed(
-            title="✅ 音声設定を保存しました",
-            description=f"{interaction.user.display_name}さんの音声設定を更新しました。",
-            color=discord.Color.green()
-        )
-        embed.add_field(name="速度", value=f"`{speed}`", inline=True)
-        embed.add_field(name="ピッチ", value=f"`{pitch}`", inline=True)
-
-        return await interaction.response.send_message(embed=embed, ephemeral=True)
-
-    @app_commands.command(name="dictionary", description="辞書を管理します（表示・追加・削除）")
-    async def dictionary(self, interaction: discord.Interaction):
-        try:
-            guild_rows = await self._get_guild_dict(interaction)
-            if guild_rows is None: return
-
-            embed = create_dictionary_embed(guild_rows, page=0)
-            view = DictionaryView(self.bot.db, self.bot, guild_rows)
-
-            await interaction.response.send_message(embed=embed, view=view)
-            view.message = await interaction.original_response()
-        except Exception as e:
-            logger.error(f"辞書管理画面の表示に失敗しました: {e}")
+        if not (-0.15 <= pitch <= 0.15):
             embed = discord.Embed(
-                title="❌ 辞書の表示エラー",
-                description="辞書管理画面の表示中にエラーが発生しました。",
+                title="❌ 無効な値",
+                description="音高は -0.15〜0.15 の範囲で指定してください。",
+                color=discord.Color.red()
+            )
+            return await interaction.response.send_message(embed=embed, ephemeral=True)
+
+        try:
+            await self.bot.db.set_user_setting(
+                interaction.user.id,
+                speaker.value,
+                speed,
+                pitch
+            )
+
+            embed = discord.Embed(
+                title="✅ 声を設定しました",
+                description=f"**話者**: {speaker.name}\n**話速**: {speed}\n**音高**: {pitch}",
+                color=discord.Color.green()
+            )
+            await interaction.response.send_message(embed=embed, ephemeral=True)
+
+        except Exception as e:
+            logger.error(f"[{interaction.guild.id}] 声の設定に失敗しました: {e}")
+            embed = discord.Embed(
+                title="❌ エラー",
+                description="声の設定中にエラーが発生しました。",
                 color=discord.Color.red()
             )
             await interaction.response.send_message(embed=embed, ephemeral=True)
 
-    @app_commands.command(name="config", description="サーバーごとの読み上げ設定を変更します")
-    async def config(self, interaction: discord.Interaction):
-        # サーバー管理権限またはBotの作成者かチェック
-        is_admin = interaction.user.guild_permissions.manage_guild
-        is_owner = await self.bot.is_owner(interaction.user)
-
-        if not (is_admin or is_owner):
-            embed = discord.Embed(
-                title="❌ 権限エラー",
-                description="このコマンドを実行するには、「サーバー管理」権限が必要です。",
-                color=discord.Color.red()
-            )
-            await interaction.response.send_message(
-                embed=embed,
-                ephemeral=True
-            )
+    @app_commands.command(name="dictionary", description="辞書を管理します")
+    @app_commands.describe(
+        action="実行する操作",
+        word="登録/削除する単語",
+        reading="読み方（カタカナ）"
+    )
+    @app_commands.choices(action=[
+        app_commands.Choice(name="一覧表示", value="list"),
+        app_commands.Choice(name="追加", value="add"),
+        app_commands.Choice(name="削除", value="delete"),
+    ])
+    async def dictionary(
+        self,
+        interaction: discord.Interaction,
+        action: app_commands.Choice[str],
+        word: str = None,
+        reading: str = None
+    ):
+        words_dict = await self._get_guild_dict(interaction)
+        if words_dict is None:
             return
 
-        try:
-            settings = await self.bot.db.get_guild_settings(interaction.guild.id)
-            is_boosted = await self.bot.db.is_guild_boosted(interaction.guild.id)
-            embed = self.create_config_embed(interaction.guild, settings, is_boosted)
-            view = ConfigSearchView(self.bot.db, self.bot)
-            await interaction.response.send_message(embed=embed, view=view, ephemeral=False)
-            view.message = await interaction.original_response()
-        except Exception as e:
-            logger.error(f"[{interaction.guild.id}] 設定画面の表示に失敗しました: {e}")
-            embed = discord.Embed(
-                title="❌ 設定画面の表示エラー",
-                description="設定画面の表示中にエラーが発生しました。",
-                color=discord.Color.red()
-            )
-            await interaction.response.send_message(embed=embed, ephemeral=True)
+        if action.value == "list":
+            if not words_dict:
+                embed = discord.Embed(
+                    title="📖 辞書一覧",
+                    description="登録されている単語はありません。",
+                    color=discord.Color.blue()
+                )
+                return await interaction.response.send_message(embed=embed)
 
-    def create_config_embed(self, guild, settings, is_boosted=False):
-        """設定用Embedを生成する共通メソッド"""
-        embed = discord.Embed(
-            title="⚙️ サーバー設定",
-            description=f"現在の設定値は以下の通りです。変更するには下のメニューから項目を選択してください。\n"
-                        f"※**{self.bot.user.name}** インスタンスの設定を表示しています。",
-            color=discord.Color.blue()
-        )
+            embed = create_dictionary_embed(words_dict, page=0)
+            view = DictionaryView(words_dict) if len(words_dict) > 10 else None
+            await interaction.response.send_message(embed=embed, view=view)
 
-        # 基本設定
-        # 無料: 50文字固定, 1ブースト以上: 設定値（最大200文字）
-        if is_boosted:
-            effective_limit = min(settings.max_chars, 200)
-            char_limit_text = f"📝 `{effective_limit}` 文字 (設定: {settings.max_chars})"
-        else:
-            char_limit_text = "📝 `50` 文字 (無料版制限)"
+        elif action.value == "add":
+            if not word or not reading:
+                embed = discord.Embed(
+                    title="❌ 入力エラー",
+                    description="単語と読み方を両方指定してください。",
+                    color=discord.Color.red()
+                )
+                return await interaction.response.send_message(embed=embed, ephemeral=True)
 
-        embed.add_field(name="文字数制限", value=char_limit_text, inline=True)
-        embed.add_field(name="さん付け", value="✅ 有効" if settings.add_suffix else "❌ 無効", inline=True)
-        embed.add_field(name="ローマ字読み", value="✅ 有効" if settings.read_romaji else "❌ 無効", inline=True)
+            if not is_katakana(reading):
+                embed = discord.Embed(
+                    title="❌ 入力エラー",
+                    description="読み方はカタカナで入力してください。",
+                    color=discord.Color.red()
+                )
+                return await interaction.response.send_message(embed=embed, ephemeral=True)
 
-        embed.add_field(name="メンション", value="✅ 有効" if settings.read_mention else "❌ 無効", inline=True)
-        embed.add_field(name="添付ファイル", value="✅ 有効" if settings.read_attachments else "❌ 無効", inline=True)
-        embed.add_field(name="入退出通知", value="✅ 有効" if settings.read_vc_status else "❌ 無効", inline=True)
+            words_dict[word] = reading
 
-        embed.add_field(name="絵文字の読み上げ", value="✅ 有効" if settings.read_emoji else "❌ 無効", inline=True)
-        embed.add_field(name="コードブロックの省略", value="✅ 有効" if settings.skip_code_blocks else "❌ 無効",
-                        inline=True)
-        embed.add_field(name="URLの省略", value="✅ 有効" if settings.skip_urls else "❌ 無効", inline=True)
+            try:
+                await self.bot.db.add_or_update_dict(interaction.guild.id, words_dict)
+                embed = discord.Embed(
+                    title="✅ 辞書に追加しました",
+                    description=f"**{word}** → **{reading}**",
+                    color=discord.Color.green()
+                )
+                await interaction.response.send_message(embed=embed)
+            except Exception as e:
+                logger.error(f"[{interaction.guild.id}] 辞書の追加に失敗しました: {e}")
+                embed = discord.Embed(
+                    title="❌ エラー",
+                    description="辞書の追加中にエラーが発生しました。",
+                    color=discord.Color.red()
+                )
+                await interaction.response.send_message(embed=embed, ephemeral=True)
 
-        # 自動接続設定
-        bot_key = str(self.bot.user.id)
-        auto_join_status = "ー"
-        if settings.auto_join and bot_key in settings.auto_join_config:
-            conf = settings.auto_join_config[bot_key]
-            vc = guild.get_channel(conf["voice"])
-            tc = guild.get_channel(conf["text"])
-            if vc and tc:
-                auto_join_status = f"✅ **有効**\n└ 監視: {vc.mention}\n└ 出力: {tc.mention}"
-            else:
-                auto_join_status = "⚠️ 設定不備"
+        elif action.value == "delete":
+            if not word:
+                embed = discord.Embed(
+                    title="❌ 入力エラー",
+                    description="削除する単語を指定してください。",
+                    color=discord.Color.red()
+                )
+                return await interaction.response.send_message(embed=embed, ephemeral=True)
 
-        embed.add_field(name="🤖 このBotの自動接続設定", value=auto_join_status, inline=False)
-        return embed
+            if word not in words_dict:
+                embed = discord.Embed(
+                    title="❌ 見つかりません",
+                    description=f"**{word}** は辞書に登録されていません。",
+                    color=discord.Color.red()
+                )
+                return await interaction.response.send_message(embed=embed, ephemeral=True)
+
+            del words_dict[word]
+
+            try:
+                await self.bot.db.add_or_update_dict(interaction.guild.id, words_dict)
+                embed = discord.Embed(
+                    title="✅ 辞書から削除しました",
+                    description=f"**{word}** を削除しました。",
+                    color=discord.Color.green()
+                )
+                await interaction.response.send_message(embed=embed)
+            except Exception as e:
+                logger.error(f"[{interaction.guild.id}] 辞書の削除に失敗しました: {e}")
+                embed = discord.Embed(
+                    title="❌ エラー",
+                    description="辞書の削除中にエラーが発生しました。",
+                    color=discord.Color.red()
+                )
+                await interaction.response.send_message(embed=embed, ephemeral=True)
 
 
 async def setup(bot):
