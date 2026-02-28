@@ -156,9 +156,6 @@ class SumireVox(commands.Bot):
         if MIN_BOOST_LEVEL > 0:
             asyncio.create_task(self.main_bot_presence_check())
 
-        vv_url = f"http://{VOICEVOX_HOST}:{VOICEVOX_PORT}"
-        web_url = f"http://localhost:{WEB_PORT}"
-
         # 起動時のステータスをテーブルで表示
         table = Table(
             title="🌸 SumireVox システム稼働状況",
@@ -173,10 +170,6 @@ class SumireVox(commands.Bot):
         table.add_row("ログインユーザー", f"{self.user} ({self.user.id})")
         table.add_row("インスタンス", f"{MIN_BOOST_LEVEL}台目 (Level: {MIN_BOOST_LEVEL})")
         table.add_row("接続サーバー数", f"{len(self.guilds)} guilds")
-
-        # エンジンの情報を表示
-        table.add_row("VOICEVOX Engine", f"[link={vv_url}]{vv_url}[/link]")
-        table.add_row("WEB管理画面", f"[link={web_url}]{web_url}[/link]")
 
         console.print(table)
         logger.success("SumireVox は正常に起動し、待機中です。")
