@@ -7,7 +7,7 @@ import os
 from loguru import logger
 from src.core.models import GuildSettings
 from src.core.cache import SettingsCache
-from src.queries import UserSettingsQueries, DictQueries, GuildSettingsQueries, BillingQueries
+from src.queries import UserSettingsQueries, DictQueries, GuildSettingsQueries, BillingQueries, VoiceSessionQueries
 
 
 class Database:
@@ -54,6 +54,8 @@ class Database:
             await conn.execute(BillingQueries.CREATE_BOOSTS_TABLE)
             await conn.execute(BillingQueries.CREATE_BOOSTS_GUILD_INDEX)
             await conn.execute(BillingQueries.CREATE_BOOSTS_USER_INDEX)
+            await conn.execute(VoiceSessionQueries.CREATE_TABLE)
+            await conn.execute(VoiceSessionQueries.CREATE_BOT_INDEX)
 
             # トリガー作成
             await self._setup_triggers(conn)
@@ -837,3 +839,114 @@ class Database:
             "pool_size": self.pool.get_size() if self.pool else 0,
             "pool_free_size": self.pool.get_idle_size() if self.pool else 0,
         }
+
+    # ========================================
+    # ボイスセッション管理
+    # ========================================
+
+    async def save_voice_session(
+            self,
+            guild_id: int,
+            voice_channel_id: int,
+            text_channel_id: int,
+            bot_id: int
+    ) -> None:
+        """
+        ボイスセッションをデータベースに保存する
+
+        Args:
+            guild_id: ギルドID
+            voice_channel_id: 接続中のボイスチャンネルID
+            text_channel_id: 読み上げ対象のテキストチャンネルID
+            bot_id: BotのユーザーID
+        """
+        guild_id = int(guild_id)
+        voice_channel_id = int(voice_channel_id)
+        text_channel_id = int(text_channel_id)
+        bot_id = int(bot_id)
+
+        async with self.pool.acquire() as conn:
+            await conn.execute(
+                VoiceSessionQueries.UPSERT_SESSION,
+                guild_id,
+                voice_channel_id,
+                text_channel_id,
+                bot_id
+            )
+        logger.info(f"[{guild_id}] Voice session saved to database (VC: {voice_channel_id}, TC: {text_channel_id})")
+
+    async def delete_voice_session(self, guild_id: int) -> None:
+        """
+        ボイスセッションをデータベースから削除する
+
+        Args:
+            guild_id: ギルドID
+        """
+        guild_id = int(guild_id)
+
+        async with self.pool.acquire() as conn:
+            await conn.execute(VoiceSessionQueries.DELETE_SESSION, guild_id)
+        logger.info(f"[{guild_id}] Voice session deleted from database")
+
+    async def get_voice_sessions_by_bot(self, bot_id: int) -> list[dict]:
+        """
+        特定のBotが持つ全てのボイスセッションを取得する（再起動時の復元用）
+
+        Args:
+            bot_id: BotのユーザーID
+
+        Returns:
+            セッション情報のリスト
+        """
+        bot_id = int(bot_id)
+
+        async with self.pool.acquire() as conn:
+            rows = await conn.fetch(VoiceSessionQueries.GET_SESSIONS_BY_BOT, bot_id)
+
+        return [
+            {
+                "guild_id": int(row["guild_id"]),
+                "voice_channel_id": int(row["voice_channel_id"]),
+                "text_channel_id": int(row["text_channel_id"]),
+                "connected_at": row["connected_at"]
+            }
+            for row in rows
+        ]
+
+    async def get_voice_session(self, guild_id: int) -> dict | None:
+        """
+        特定ギルドのボイスセッションを取得する
+
+        Args:
+            guild_id: ギルドID
+
+        Returns:
+            セッション情報 or None
+        """
+        guild_id = int(guild_id)
+
+        async with self.pool.acquire() as conn:
+            row = await conn.fetchrow(VoiceSessionQueries.GET_SESSION, guild_id)
+
+        if row:
+            return {
+                "guild_id": int(row["guild_id"]),
+                "voice_channel_id": int(row["voice_channel_id"]),
+                "text_channel_id": int(row["text_channel_id"]),
+                "bot_id": int(row["bot_id"]),
+                "connected_at": row["connected_at"]
+            }
+        return None
+
+    async def clear_voice_sessions_by_bot(self, bot_id: int) -> None:
+        """
+        特定BotのボイスセッションをすべてDBから削除する（起動時のクリーンアップ用）
+
+        Args:
+            bot_id: BotのユーザーID
+        """
+        bot_id = int(bot_id)
+
+        async with self.pool.acquire() as conn:
+            await conn.execute(VoiceSessionQueries.DELETE_ALL_SESSIONS_BY_BOT, bot_id)
+        logger.info(f"Cleared all voice sessions for bot {bot_id}")

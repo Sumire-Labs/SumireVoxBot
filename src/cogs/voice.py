@@ -606,7 +606,11 @@ class Voice(commands.Cog):
 
             logger.warning(f"[{guild_id}] VC切断を確認したため、キューをクリアします。")
 
+            # 変数から削除
             self.read_channels.pop(guild_id, None)
+
+            # データベースから削除
+            await self.bot.db.delete_voice_session(guild_id)
 
             # 辞書をアンロード
             self.bot.db.unload_guild_dict(guild_id)
@@ -653,7 +657,7 @@ class Voice(commands.Cog):
             return
 
         try:
-            # プレミアムチェック (ブーストされていない場合は自動接続をスキップ)
+            # プレミアムチェック
             is_boosted = await self.bot.db.is_guild_boosted(member.guild.id)
             if not is_boosted:
                 logger.debug(f"[{member.guild.id}] プレミアム未加入のため、自動接続をスキップしました。")
@@ -685,7 +689,17 @@ class Voice(commands.Cog):
 
             try:
                 await after.channel.connect()
+
+                # 変数に保存
                 self.read_channels[member.guild.id] = target_tc_id
+
+                # データベースに保存
+                await self.bot.db.save_voice_session(
+                    guild_id=member.guild.id,
+                    voice_channel_id=after.channel.id,
+                    text_channel_id=target_tc_id,
+                    bot_id=self.bot.user.id
+                )
 
                 # 辞書をロード
                 await self.bot.db.load_guild_dict(member.guild.id)
@@ -729,7 +743,11 @@ class Voice(commands.Cog):
         if len(non_bot_members) == 0:
             logger.info(f"[{member.guild.id}] VC({target_channel.name})にユーザーがいなくなったため自動切断します。")
 
+            # 変数から削除
             self.read_channels.pop(member.guild.id, None)
+
+            # データベースから削除
+            await self.bot.db.delete_voice_session(member.guild.id)
 
             # 辞書をアンロード
             self.bot.db.unload_guild_dict(member.guild.id)
@@ -759,7 +777,6 @@ class Voice(commands.Cog):
             return await interaction.response.send_message(embed=embed, ephemeral=True)
 
         # 重複チェック: 同じチャンネルに他のBot（SumireVoxシリーズ）がいないか
-        # 自分のBot名に "SumireVox" が含まれている前提で、同じプレフィックスのBotを探す
         other_bot = discord.utils.find(
             lambda m: m.bot and m.id != self.bot.user.id and ("Sumire" in m.name or "Vox" in m.name),
             channel.members
@@ -774,7 +791,17 @@ class Voice(commands.Cog):
 
         try:
             await channel.connect()
+
+            # 変数に保存
             self.read_channels[interaction.guild.id] = interaction.channel.id
+
+            # データベースに保存
+            await self.bot.db.save_voice_session(
+                guild_id=interaction.guild.id,
+                voice_channel_id=channel.id,
+                text_channel_id=interaction.channel.id,
+                bot_id=self.bot.user.id
+            )
 
             # 辞書をロード
             await self.bot.db.load_guild_dict(interaction.guild.id)
@@ -828,7 +855,11 @@ class Voice(commands.Cog):
     async def leave(self, interaction: discord.Interaction):
         try:
             if interaction.guild.voice_client:
+                # 変数から削除
                 self.read_channels.pop(interaction.guild.id, None)
+
+                # データベースから削除
+                await self.bot.db.delete_voice_session(interaction.guild.id)
 
                 # 辞書をアンロード
                 self.bot.db.unload_guild_dict(interaction.guild.id)
