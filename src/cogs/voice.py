@@ -296,7 +296,7 @@ class Voice(commands.Cog):
                 s = {"speaker": 1, "speed": 1.0, "pitch": 0.0}
 
             is_boosted = await self.bot.db.is_guild_boosted(guild_id)
-            if not await is_boosted:
+            if not is_boosted:
                 s["speed"] = 1.0
                 s["pitch"] = 0.0
 
