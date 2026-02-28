@@ -9,7 +9,7 @@ import jaconv
 from loguru import logger
 import romkan2
 from dotenv import load_dotenv
-from src.utils.views import ConfigSearchView, DictionaryView
+from src.utils.views import ConfigSearchView, DictionaryView, create_dictionary_embed
 import uuid
 from dataclasses import dataclass, field
 
@@ -965,9 +965,9 @@ class Voice(commands.Cog):
             guild_rows = await self._get_guild_dict(interaction)
             if guild_rows is None: return
 
-            embed = self.create_dictionary_embed(guild_rows)
+            embed = create_dictionary_embed(guild_rows, page=0)
+            view = DictionaryView(self.bot.db, self.bot, guild_rows)
 
-            view = DictionaryView(self.bot.db, self.bot)
             await interaction.response.send_message(embed=embed, view=view)
             view.message = await interaction.original_response()
         except Exception as e:
@@ -978,12 +978,6 @@ class Voice(commands.Cog):
                 color=discord.Color.red()
             )
             await interaction.response.send_message(embed=embed, ephemeral=True)
-
-    def create_dictionary_embed(self, guild_rows):
-        """辞書表示用Embedを生成する"""
-        embed = discord.Embed(title="📖 辞書管理", color=discord.Color.blue(), description=format_rows(guild_rows))
-        embed.set_footer(text="下のボタンから単語を追加・削除できます")
-        return embed
 
     @app_commands.command(name="config", description="サーバーごとの読み上げ設定を変更します")
     async def config(self, interaction: discord.Interaction):

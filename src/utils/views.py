@@ -1,6 +1,9 @@
 import discord
 from src.utils.logger import logger
 
+# 1ページあたりの表示件数
+DICTIONARY_PAGE_SIZE = 20
+
 
 async def update_config_message(bot, interaction, settings, original_message):
     """元の設定メッセージのEmbedを最新の状態に更新する共通処理"""
@@ -50,7 +53,6 @@ class ConfigEditModal(discord.ui.Modal):
             setattr(settings, self.item_key, new_value)
             await self.db.set_guild_settings(interaction.guild.id, settings)
 
-            # メッセージの更新
             await update_config_message(self.bot, interaction, settings, self.original_message)
 
             await interaction.response.send_message(f"✅ 設定を更新しました：`{old_value}` ➡ **`{new_value}`**",
@@ -85,7 +87,6 @@ class ConfigToggleView(discord.ui.View):
         setattr(settings, self.item_key, new_value)
         await self.db.set_guild_settings(interaction.guild.id, settings)
 
-        # メッセージの更新
         await update_config_message(self.bot, interaction, settings, self.original_message)
 
         status_text = "有効" if new_value else "無効"
@@ -154,7 +155,6 @@ class ConfigAutoJoinView(discord.ui.View):
     async def delete_config(self, interaction: discord.Interaction, button: discord.ui.Button):
         settings = await self.db.get_guild_settings(interaction.guild.id)
 
-        # 設定が存在しない場合
         if settings.auto_join_config is None:
             return await interaction.response.send_message(
                 "❌ このBotの自動接続設定は登録されていません。",
@@ -163,17 +163,14 @@ class ConfigAutoJoinView(discord.ui.View):
 
         bot_key = str(self.bot.user.id)
 
-        # このBotの設定が存在しない場合
         if bot_key not in settings.auto_join_config:
             return await interaction.response.send_message(
                 "❌ このBotの自動接続設定は登録されていません。",
                 ephemeral=True
             )
 
-        # 設定を削除
         del settings.auto_join_config[bot_key]
 
-        # 全てのBot設定が空になった場合、auto_joinをFalseに
         if not settings.auto_join_config:
             settings.auto_join = False
 
@@ -258,35 +255,114 @@ class ConfigSearchView(discord.ui.View):
             )
 
 
-# 辞書管理用の View
+def create_dictionary_embed(words_dict: dict, page: int = 0) -> discord.Embed:
+    """辞書のEmbedを作成する（ページネーション対応）"""
+    if not words_dict:
+        embed = discord.Embed(
+            title="📖 サーバー辞書",
+            description="登録されている単語はありません。",
+            color=discord.Color.blue()
+        )
+        embed.set_footer(text="0 件登録")
+        return embed
+
+    items = sorted(words_dict.items(), key=lambda x: x[0])
+    total_items = len(items)
+    total_pages = max(1, (total_items + DICTIONARY_PAGE_SIZE - 1) // DICTIONARY_PAGE_SIZE)
+
+    page = max(0, min(page, total_pages - 1))
+
+    start_idx = page * DICTIONARY_PAGE_SIZE
+    end_idx = min(start_idx + DICTIONARY_PAGE_SIZE, total_items)
+    page_items = items[start_idx:end_idx]
+
+    description = "\n".join(f"・`{word}` → `{reading}`" for word, reading in page_items)
+
+    embed = discord.Embed(
+        title="📖 サーバー辞書",
+        description=description,
+        color=discord.Color.blue()
+    )
+    embed.set_footer(text=f"{total_items} 件登録 | ページ {page + 1}/{total_pages}")
+
+    return embed
+
+
+# 辞書管理用の View（ページネーション対応）
 class DictionaryView(discord.ui.View):
-    def __init__(self, db, bot):
+    def __init__(self, db, bot, words_dict: dict | None = None):
         super().__init__(timeout=180)
         self.db = db
         self.bot = bot
         self.message: discord.Message | None = None
+        self.words_dict: dict = words_dict if words_dict else {}
+        self.current_page: int = 0
+        self._update_buttons()
 
-    @discord.ui.button(label="単語を追加", style=discord.ButtonStyle.success, emoji="➕")
+    def _get_total_pages(self) -> int:
+        if not self.words_dict:
+            return 1
+        return max(1, (len(self.words_dict) + DICTIONARY_PAGE_SIZE - 1) // DICTIONARY_PAGE_SIZE)
+
+    def _update_buttons(self):
+        total_pages = self._get_total_pages()
+        self.first_button.disabled = self.current_page <= 0
+        self.prev_button.disabled = self.current_page <= 0
+        self.next_button.disabled = self.current_page >= total_pages - 1
+        self.last_button.disabled = self.current_page >= total_pages - 1
+
+    async def _refresh_dict(self, guild_id: int):
+        words_dict = await self.db.get_dict(guild_id)
+        self.words_dict = words_dict if isinstance(words_dict, dict) else {}
+        total_pages = self._get_total_pages()
+        if self.current_page >= total_pages:
+            self.current_page = max(0, total_pages - 1)
+
+    async def _update_message(self, interaction: discord.Interaction):
+        self._update_buttons()
+        embed = create_dictionary_embed(self.words_dict, self.current_page)
+        await interaction.response.edit_message(embed=embed, view=self)
+
+    @discord.ui.button(label="≪", style=discord.ButtonStyle.secondary, row=0)
+    async def first_button(self, interaction: discord.Interaction, button: discord.ui.Button):
+        self.current_page = 0
+        await self._update_message(interaction)
+
+    @discord.ui.button(label="◀", style=discord.ButtonStyle.secondary, row=0)
+    async def prev_button(self, interaction: discord.Interaction, button: discord.ui.Button):
+        self.current_page = max(0, self.current_page - 1)
+        await self._update_message(interaction)
+
+    @discord.ui.button(label="▶", style=discord.ButtonStyle.secondary, row=0)
+    async def next_button(self, interaction: discord.Interaction, button: discord.ui.Button):
+        self.current_page = min(self._get_total_pages() - 1, self.current_page + 1)
+        await self._update_message(interaction)
+
+    @discord.ui.button(label="≫", style=discord.ButtonStyle.secondary, row=0)
+    async def last_button(self, interaction: discord.Interaction, button: discord.ui.Button):
+        self.current_page = self._get_total_pages() - 1
+        await self._update_message(interaction)
+
+    @discord.ui.button(label="追加", style=discord.ButtonStyle.success, emoji="➕", row=1)
     async def add_word_button(self, interaction: discord.Interaction, button: discord.ui.Button):
-        await interaction.response.send_modal(DictionaryAddModal(self.db, self.bot, self.message))
+        await interaction.response.send_modal(DictionaryAddModal(self.db, self.bot, self))
 
-    @discord.ui.button(label="単語を削除", style=discord.ButtonStyle.danger, emoji="🗑️")
+    @discord.ui.button(label="削除", style=discord.ButtonStyle.danger, emoji="🗑️", row=1)
     async def remove_word_button(self, interaction: discord.Interaction, button: discord.ui.Button):
-        await interaction.response.send_modal(DictionaryRemoveModal(self.db, self.bot, self.message))
+        await interaction.response.send_modal(DictionaryRemoveModal(self.db, self.bot, self))
 
-    @discord.ui.button(label="閉じる", style=discord.ButtonStyle.secondary, emoji="❌")
+    @discord.ui.button(label="閉じる", style=discord.ButtonStyle.secondary, emoji="❌", row=1)
     async def close_button(self, interaction: discord.Interaction, button: discord.ui.Button):
         await interaction.response.defer()
         await interaction.message.delete()
 
 
-# 辞書追加用のモーダル
 class DictionaryAddModal(discord.ui.Modal):
-    def __init__(self, db, bot, original_message: discord.Message | None = None):
-        super().__init__(title="単語を辞書に追加")
+    def __init__(self, db, bot, dictionary_view: DictionaryView):
+        super().__init__(title="単語を追加")
         self.db = db
         self.bot = bot
-        self.original_message = original_message
+        self.dictionary_view = dictionary_view
 
         self.word_input = discord.ui.TextInput(
             label="登録する単語",
@@ -316,92 +392,81 @@ class DictionaryAddModal(discord.ui.Modal):
             return re.fullmatch(r'^[ァ-ヶーヴ]+$', text) is not None
 
         try:
-            # 読み方の正規化
             normalized_reading = jaconv.h2z(reading, kana=True, digit=False, ascii=False)
             normalized_reading = jaconv.hira2kata(normalized_reading)
         except Exception as e:
             logger.error(f"[{interaction.guild.id}] 読み方の正規化に失敗しました: {e}")
-            embed = discord.Embed(
-                title="❌ 変換エラー",
-                description="読み方の変換中にエラーが発生しました。",
-                color=discord.Color.red()
+            return await interaction.response.send_message(
+                embed=discord.Embed(title="❌ 変換エラー", description="読み方の変換中にエラーが発生しました。", color=discord.Color.red()),
+                ephemeral=True
             )
-            return await interaction.response.send_message(embed=embed, ephemeral=True)
 
-        # 最終チェック
         if not is_katakana(normalized_reading):
-            embed = discord.Embed(
-                title="❌ 入力エラー",
-                description="読み方は「ひらがな」または「カタカナ」で入力してください。",
-                color=discord.Color.red()
+            return await interaction.response.send_message(
+                embed=discord.Embed(title="❌ 入力エラー", description="読み方は「ひらがな」または「カタカナ」で入力してください。", color=discord.Color.red()),
+                ephemeral=True
             )
-            return await interaction.response.send_message(embed=embed, ephemeral=True)
 
         if not word:
-            embed = discord.Embed(
-                title="❌ 入力エラー",
-                description="単語を入力してください。",
-                color=discord.Color.red()
+            return await interaction.response.send_message(
+                embed=discord.Embed(title="❌ 入力エラー", description="単語を入力してください。", color=discord.Color.red()),
+                ephemeral=True
             )
-            return await interaction.response.send_message(embed=embed, ephemeral=True)
 
         try:
-            # 既存の辞書を取得
             words_dict = await self.db.get_dict(interaction.guild.id)
-
-            # 辞書が存在しない場合は新規作成
             if not words_dict or not isinstance(words_dict, dict):
                 words_dict = {}
 
-            # プレミアムチェック (登録数上限)
             is_boosted = await self.bot.db.is_guild_boosted(interaction.guild.id)
             limit = 100 if is_boosted else 10
 
             if len(words_dict) >= limit and word not in words_dict:
-                embed = discord.Embed(
-                    title="💎 登録上限エラー",
-                    description=f"辞書の登録数が上限に達しています。\n"
-                                f"現在のプランの上限: **{limit}** 個\n\n"
-                                f"{'プレミアムプラン（1ブースト）に加入すると、最大100個まで登録可能です。' if not is_boosted else 'これ以上の登録はできません。'}",
-                    color=discord.Color.gold()
+                return await interaction.response.send_message(
+                    embed=discord.Embed(
+                        title="💎 登録上限エラー",
+                        description=f"辞書の登録数が上限に達しています。\n現在のプランの上限: **{limit}** 個\n\n"
+                                    f"{'プレミアムプランに加入すると、最大100個まで登録可能です。' if not is_boosted else 'これ以上の登録はできません。'}",
+                        color=discord.Color.gold()
+                    ),
+                    ephemeral=True
                 )
-                return await interaction.response.send_message(embed=embed, ephemeral=True)
 
-            # 新しい単語と読みを追加
             words_dict[word] = normalized_reading
-
-            # 更新された辞書をDBに保存
             await self.db.add_or_update_dict(interaction.guild.id, words_dict)
 
             logger.success(f"[{interaction.guild.id}] 辞書登録: {word} -> {normalized_reading}")
-            embed = discord.Embed(
-                title="✅ 単語を追加しました",
-                description=f"`{word}` → `{normalized_reading}`",
-                color=discord.Color.green()
+            await interaction.response.send_message(
+                embed=discord.Embed(title="✅ 単語を追加しました", description=f"`{word}` → `{normalized_reading}`", color=discord.Color.green()),
+                ephemeral=True
             )
-            await interaction.response.send_message(embed=embed, ephemeral=True)
 
-            # 元のメッセージを更新
-            if self.original_message:
-                await update_dictionary_message(self.bot, interaction, self.original_message)
+            await self._update_dictionary_view(interaction)
 
         except Exception as e:
             logger.error(f"[{interaction.guild.id}] 辞書登録に失敗しました: {e}")
-            embed = discord.Embed(
-                title="❌ 辞書への登録に失敗しました",
-                description="辞書への登録中にエラーが発生しました。",
-                color=discord.Color.red()
+            return await interaction.response.send_message(
+                embed=discord.Embed(title="❌ 登録エラー", description="辞書への登録中にエラーが発生しました。", color=discord.Color.red()),
+                ephemeral=True
             )
-            return await interaction.response.send_message(embed=embed, ephemeral=True)
+
+    async def _update_dictionary_view(self, interaction: discord.Interaction):
+        if self.dictionary_view and self.dictionary_view.message:
+            try:
+                await self.dictionary_view._refresh_dict(interaction.guild.id)
+                self.dictionary_view._update_buttons()
+                embed = create_dictionary_embed(self.dictionary_view.words_dict, self.dictionary_view.current_page)
+                await self.dictionary_view.message.edit(embed=embed, view=self.dictionary_view)
+            except Exception as e:
+                logger.error(f"辞書 embedの更新に失敗しました: {e}")
 
 
-# 辞書削除用のモーダル
 class DictionaryRemoveModal(discord.ui.Modal):
-    def __init__(self, db, bot, original_message: discord.Message | None = None):
-        super().__init__(title="辞書から単語を削除")
+    def __init__(self, db, bot, dictionary_view: DictionaryView):
+        super().__init__(title="単語を削除")
         self.db = db
         self.bot = bot
-        self.original_message = original_message
+        self.dictionary_view = dictionary_view
 
         self.word_input = discord.ui.TextInput(
             label="削除する単語",
@@ -416,71 +481,55 @@ class DictionaryRemoveModal(discord.ui.Modal):
         word = self.word_input.value.strip()
 
         try:
-            # DBから現在の辞書を取得
             words_dict = await self.db.get_dict(interaction.guild.id)
 
-            # 辞書が存在しない、または空の場合
-            if not words_dict or not isinstance(words_dict, dict):
-                embed = discord.Embed(
-                    title="⚠️ 単語が見つかりません",
-                    description=f"`{word}` は辞書に登録されていません。",
-                    color=discord.Color.orange()
+            if not words_dict or not isinstance(words_dict, dict) or word not in words_dict:
+                return await interaction.response.send_message(
+                    embed=discord.Embed(title="⚠️ 単語が見つかりません", description=f"`{word}` は辞書に登録されていません。", color=discord.Color.orange()),
+                    ephemeral=True
                 )
-                return await interaction.response.send_message(embed=embed, ephemeral=True)
 
-            # 削除する単語が辞書に存在するかチェック
-            if word not in words_dict:
-                embed = discord.Embed(
-                    title="⚠️ 単語が見つかりません",
-                    description=f"`{word}` は辞書に登録されていません。",
-                    color=discord.Color.orange()
-                )
-                return await interaction.response.send_message(embed=embed, ephemeral=True)
-
-            # 辞書から単語を削除
             del words_dict[word]
-
-            # 更新された辞書をDBに保存
             success = await self.db.add_or_update_dict(interaction.guild.id, words_dict)
 
             if success:
                 logger.success(f"[{interaction.guild.id}] 辞書削除: {word}")
-                embed = discord.Embed(
-                    title="✅ 単語を削除しました",
-                    description=f"`{word}` を辞書から削除しました。",
-                    color=discord.Color.green()
+                await interaction.response.send_message(
+                    embed=discord.Embed(title="✅ 単語を削除しました", description=f"`{word}` を辞書から削除しました。", color=discord.Color.green()),
+                    ephemeral=True
                 )
-                await interaction.response.send_message(embed=embed, ephemeral=True)
-
-                # 元のメッセージを更新
-                if self.original_message:
-                    await update_dictionary_message(self.bot, interaction, self.original_message)
+                await self._update_dictionary_view(interaction)
             else:
-                logger.warning(f"[{interaction.guild.id}] 辞書削除に失敗しました: {word}")
-                embed = discord.Embed(
-                    title="⚠️ 削除失敗",
-                    description="削除に失敗しました。",
-                    color=discord.Color.orange()
+                return await interaction.response.send_message(
+                    embed=discord.Embed(title="⚠️ 削除失敗", description="削除に失敗しました。", color=discord.Color.orange()),
+                    ephemeral=True
                 )
-                return await interaction.response.send_message(embed=embed, ephemeral=True)
 
         except Exception as e:
             logger.error(f"[{interaction.guild.id}] 辞書操作中にエラーが発生しました: {e}")
-            embed = discord.Embed(
-                title="❌ エラーが発生しました",
-                description="辞書操作中にエラーが発生しました。",
-                color=discord.Color.red()
+            return await interaction.response.send_message(
+                embed=discord.Embed(title="❌ エラー", description="辞書操作中にエラーが発生しました。", color=discord.Color.red()),
+                ephemeral=True
             )
-            return await interaction.response.send_message(embed=embed, ephemeral=True)
+
+    async def _update_dictionary_view(self, interaction: discord.Interaction):
+        if self.dictionary_view and self.dictionary_view.message:
+            try:
+                await self.dictionary_view._refresh_dict(interaction.guild.id)
+                self.dictionary_view._update_buttons()
+                embed = create_dictionary_embed(self.dictionary_view.words_dict, self.dictionary_view.current_page)
+                await self.dictionary_view.message.edit(embed=embed, view=self.dictionary_view)
+            except Exception as e:
+                logger.error(f"辞書 embedの更新に失敗しました: {e}")
 
 
 async def update_dictionary_message(bot, interaction, original_message):
-    """元の辞書メッセージのEmbedを最新の状態に更新する"""
+    """後方互換用"""
     voice_cog = bot.get_cog("Voice")
     if voice_cog and original_message:
         try:
-            guild_rows = await voice_cog._get_guild_dict(interaction)
-            new_embed = voice_cog.create_dictionary_embed(guild_rows)
-            await original_message.edit(embed=new_embed)
+            words_dict = await voice_cog._get_guild_dict(interaction)
+            embed = create_dictionary_embed(words_dict)
+            await original_message.edit(embed=embed)
         except Exception as e:
             logger.error(f"辞書 embedの更新に失敗しました: {e}")
