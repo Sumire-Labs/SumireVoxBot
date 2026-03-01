@@ -10,7 +10,8 @@ async def update_config_message(bot, interaction, settings, original_message):
     voice_cog = bot.get_cog("Voice")
     if voice_cog and original_message:
         try:
-            new_embed = voice_cog.create_config_embed(interaction.guild, settings)
+            is_boosted = await bot.db.is_guild_boosted(interaction.guild.id)
+            new_embed = voice_cog.create_config_embed(interaction.guild, settings, is_boosted)
             await original_message.edit(embed=new_embed)
         except Exception as e:
             logger.error(f"config embedの更新に失敗しました: {e}")
@@ -44,8 +45,8 @@ class ConfigEditModal(discord.ui.Modal):
         settings = await self.db.get_guild_settings(interaction.guild.id)
         old_value = getattr(settings, self.item_key)
 
+        is_boosted = await self.db.is_guild_boosted(interaction.guild.id)
         if int(value) > 50:
-            is_boosted = await self.db.is_guild_boosted(interaction.guild.id)
             if not is_boosted:
                 return await interaction.response.send_message("❌ サーバーがブーストされていません。", ephemeral=True)
 
