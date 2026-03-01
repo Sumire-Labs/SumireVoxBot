@@ -828,7 +828,7 @@ class Voice(commands.Cog):
             return
 
         try:
-            is_boosted = await self.bot.db.is_guild_boosted(member.guild.id)
+            is_boosted = await self.bot.db.is_instance_active(member.guild.id)
             if not is_boosted:
                 logger.debug(f"[{member.guild.id}] プレミアム未加入のため、自動接続をスキップしました。")
                 return
