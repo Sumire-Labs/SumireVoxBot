@@ -4,6 +4,7 @@ from loguru import logger
 
 from src.utils.views import ConfigSearchView
 from ..embeds.create_config_embed import create_config_embed
+from ..embeds.create_config_error_embed import create_config_error_embed
 
 
 async def config(bot, interaction: discord.Interaction):
@@ -11,11 +12,7 @@ async def config(bot, interaction: discord.Interaction):
     is_owner = await bot.is_owner(interaction.user)
 
     if not (is_admin or is_owner):
-        embed = discord.Embed(
-            title="❌ 権限エラー",
-            description="このコマンドを実行するには、「サーバー管理」権限が必要です。",
-            color=discord.Color.red()
-        )
+        embed = create_config_error_embed("permission")
         return await interaction.response.send_message(
             embed=embed,
             ephemeral=True
@@ -30,9 +27,5 @@ async def config(bot, interaction: discord.Interaction):
         view.message = await interaction.original_response()
     except Exception as e:
         logger.error(f"[{interaction.guild.id}] 設定画面の表示に失敗しました: {e}")
-        embed = discord.Embed(
-            title="❌ 設定画面の表示エラー",
-            description="設定画面の表示中にエラーが発生しました。",
-            color=discord.Color.red()
-        )
+        embed = create_config_error_embed("display")
         await interaction.response.send_message(embed=embed, ephemeral=True)
