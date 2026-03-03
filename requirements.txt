@@ -1,7 +1,7 @@
 aiofiles
 aiohttp
 asyncpg
-discord.py==2.7.0
+discord.py[voice]
 fastapi
 jaconv
 jinja2
